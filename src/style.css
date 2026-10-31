@@ -1,0 +1,83 @@
+:root {
+  --bg: #0e0d0c;
+  --panel: rgba(20, 19, 18, 0.72);
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f1ece6;
+  --muted: #a39b92;
+  --accent: #e7a86b;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; width: 100%; height: 100%; }
+
+.loading {
+  position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted);
+  font-size: 14px; letter-spacing: 0.04em; pointer-events: none; transition: opacity 0.6s;
+}
+.loading.hidden { opacity: 0; }
+
+.topbar {
+  position: fixed; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; gap: 12px;
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+body.speaking .dot { background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+body.thinking .dot { background: #7fb2ff; animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { opacity: 0.35; } }
+.status { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+button, input, select {
+  font: inherit; color: inherit; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px;
+}
+button { cursor: pointer; }
+button:hover { background: rgba(255, 255, 255, 0.12); }
+button.primary, #send { background: var(--accent); color: #1b1410; border-color: transparent; font-weight: 600; }
+button.icon { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; font-size: 17px; }
+#mic.recording { background: #c8463c; color: white; }
+
+.chat {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  width: min(720px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 10px;
+}
+.messages {
+  max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  mask-image: linear-gradient(to bottom, transparent, black 24px);
+  padding-top: 24px;
+}
+.msg {
+  max-width: 85%; padding: 9px 13px; border-radius: 14px; background: var(--panel);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--border);
+  font-size: 14px; line-height: 1.45; white-space: pre-wrap;
+}
+.msg.user { align-self: flex-end; background: rgba(231, 168, 107, 0.18); }
+.msg.error { border-color: rgba(200, 70, 60, 0.6); color: #ffb4ab; }
+.composer {
+  display: flex; gap: 8px; padding: 8px; border-radius: 16px; background: var(--panel);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--border);
+}
+.composer input { flex: 1; min-width: 0; background: transparent; border-color: transparent; }
+.composer input:focus { outline: none; }
+
+dialog {
+  width: min(480px, calc(100% - 32px)); border: 1px solid var(--border); border-radius: 16px;
+  background: #1a1817; color: var(--text); padding: 22px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(3px); }
+dialog h2 { margin: 0 0 14px; font-size: 18px; }
+dialog label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+dialog input, dialog select { color: var(--text); width: 100%; }
+dialog small { font-size: 12px; opacity: 0.8; }
+dialog code { font-size: 12px; }
+.row { display: flex; gap: 8px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
+.actions #demo { margin-right: auto; }
+
+@media (max-width: 520px) {
+  .messages { max-height: 26vh; }
+  #send { padding: 9px 10px; }
+}

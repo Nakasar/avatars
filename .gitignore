@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env.local
+# Assets récupérés par `npm run setup` (licences tierces, non versionnés)
+public/basis/
