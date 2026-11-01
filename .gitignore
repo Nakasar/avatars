@@ -5,3 +5,4 @@ dist/
 public/basis/
 __pycache__/
 .claude/
+*.blend1
