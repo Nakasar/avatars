@@ -144,8 +144,12 @@ export class Avatar {
     model.updateMatrixWorld(true);
     const bbox = new THREE.Box3().setFromObject(model);
     const height = bbox.max.y - bbox.min.y;
-    const isBust = !!findNode(model, /^(mixamorig:?)?(spine2?|neck)$/i) && height > 1;
-    this.framingHeight = isBust ? height * 0.21 : height;
+    const rigged = !!findNode(model, /^(mixamorig:?)?(spine2?|neck)$/i);
+    // Corps entier riggé : on cadre la tête et le haut des épaules.
+    const isBust = rigged && height > 1;
+    // Buste seul (tête, cou, épaules) : même cadrage, sans le reste du buste.
+    const isShortBust = rigged && height <= 1;
+    this.framingHeight = isBust ? height * 0.21 : isShortBust ? Math.min(height, 0.4) : height;
     if (left && right) {
       const a = left.getWorldPosition(new THREE.Vector3());
       const b = right.getWorldPosition(new THREE.Vector3());
@@ -154,7 +158,7 @@ export class Avatar {
       const c = bbox.getCenter(new THREE.Vector3());
       this.focus.set(c.x, isBust ? bbox.max.y - height * 0.07 : c.y, c.z);
     }
-    if (isBust) this.focus.y -= this.framingHeight * 0.17; // inclut le haut des épaules
+    if (isBust || isShortBust) this.focus.y -= this.framingHeight * 0.17; // inclut le haut des épaules
   }
 
   /**

@@ -3,3 +3,5 @@ dist/
 .env.local
 # Assets récupérés par `npm run setup` (licences tierces, non versionnés)
 public/basis/
+__pycache__/
+.claude/

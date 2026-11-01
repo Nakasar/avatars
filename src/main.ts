@@ -16,7 +16,7 @@ let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
 let avatar: Avatar | undefined;
-const DEFAULT_MODEL = '/models/mpfb.glb';
+const DEFAULT_MODEL = '/models/human.glb';
 
 // ---------------------------------------------------------------- Avatar
 async function loadAvatar(url: string) {
