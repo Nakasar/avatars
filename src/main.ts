@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { Stage } from './scene/Stage';
-import { Avatar, type Expression } from './avatar/Avatar';
-import { Recorder, SentenceChunker, Voice } from './avatar/Voice';
+import { Avatar } from './avatar/Avatar';
+import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
+import { Conversation, type ConversationState } from './conversation/Conversation';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -15,6 +16,7 @@ let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
 let avatar: Avatar | undefined;
+const DEFAULT_MODEL = '/models/mpfb.glb';
 
 // ---------------------------------------------------------------- Avatar
 async function loadAvatar(url: string) {
@@ -25,16 +27,14 @@ async function loadAvatar(url: string) {
     avatar = next;
     stage.scene.add(avatar.root);
     stage.frame(avatar.root, avatar.root.localToWorld(avatar.focus.clone()), avatar.framingHeight);
-    avatar.setExpression('listening', 0.8);
+    avatar.setExpression('listening', 0.6);
     console.info('[avatar] blendshapes :', avatar.morphTargetNames.length, avatar.morphTargetNames);
   } catch (e) {
-    addMessage('error', `Impossible de charger le modèle 3D : ${e instanceof Error ? e.message : e}`);
+    showError(`Impossible de charger le modèle 3D : ${e instanceof Error ? e.message : e}`);
   } finally {
     $('loading').classList.add('hidden');
   }
 }
-
-const DEFAULT_MODEL = '/models/mpfb.glb';
 
 stage.onUpdate((dt, t) => {
   if (!avatar) return;
@@ -44,140 +44,78 @@ stage.onUpdate((dt, t) => {
   avatar.update(dt, t);
 });
 
-voice.onSpeakingChange = (speaking) => {
-  document.body.classList.toggle('speaking', speaking);
-  if (!speaking && !busy) avatar?.setExpression('listening', 0.8);
+// ---------------------------------------------------------------- Conversation
+const STATE_LABEL: Record<ConversationState, string> = {
+  off: 'Touchez l’écran pour commencer',
+  idle: 'Je vous écoute',
+  'user-speaking': 'Je vous écoute…',
+  transcribing: 'Je réfléchis…',
+  thinking: 'Je réfléchis…',
+  speaking: 'Vous pouvez m’interrompre',
 };
 
-// ---------------------------------------------------------------- Chat
-let busy = false;
-let abort: AbortController | undefined;
-
-function addMessage(kind: 'user' | 'agent' | 'error', text: string) {
-  const el = document.createElement('div');
-  el.className = `msg ${kind}`;
-  el.textContent = text;
-  $('messages').appendChild(el);
-  $('messages').scrollTop = $('messages').scrollHeight;
-  return el;
-}
-
-function setStatus(text: string) {
-  $('status').textContent = text;
-}
-
-async function ask(text: string) {
-  text = text.trim();
-  if (!text || busy) return;
-  voice.unlock();
-  voice.stop();
-  addMessage('user', text);
-
-  if (!breign.configured) {
-    addMessage('error', 'Renseignez une clé API et un agent dans les réglages (⚙).');
-    ($('settings') as HTMLDialogElement).showModal();
-    return;
-  }
-
-  busy = true;
-  document.body.classList.add('thinking');
-  avatar?.setExpression('thinking', 0.9);
-  setStatus('Réflexion…');
-  const bubble = addMessage('agent', '…');
-  const chunker = new SentenceChunker();
-  abort = new AbortController();
-  let spoke = false;
-
-  try {
-    const final = await breign.send(
-      text,
-      ({ text: partial, done }) => {
-        bubble.textContent = partial || '…';
-        $('messages').scrollTop = $('messages').scrollHeight;
-        for (const sentence of chunker.push(partial, done)) {
-          if (!spoke) {
-            spoke = true;
-            document.body.classList.remove('thinking');
-            avatar?.setExpression(moodOf(partial), 0.6);
-            setStatus('Parle');
-          }
-          voice.say(sentence);
-        }
-      },
-      abort.signal,
-    );
-    bubble.textContent = final;
-    for (const sentence of chunker.push(final, true)) voice.say(sentence);
-    setStatus('Connecté');
-  } catch (e) {
-    if ((e as Error).name !== 'AbortError') {
-      bubble.remove();
-      addMessage('error', await describeError(e));
-      setStatus('Erreur');
-      avatar?.setExpression('sad', 0.4);
-    }
-  } finally {
-    busy = false;
-    document.body.classList.remove('thinking');
-  }
-}
-
-/** Humeur simple déduite du texte, pour colorer l'expression pendant la parole. */
-function moodOf(text: string): Expression {
-  if (/[!😀😄😊🙂]|ravi|super|génial|parfait|bravo|great|glad|happy/i.test(text)) return 'happy';
-  if (/désolé|malheureusement|sorry|unfortunately|hélas/i.test(text)) return 'sad';
-  if (/\?\s*$/.test(text)) return 'surprised';
-  return 'neutral';
-}
-
-$('composer').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = $<HTMLInputElement>('input');
-  void ask(input.value);
-  input.value = '';
+const conversation = new Conversation(voice, () => breign, () => avatar, {
+  onState: (s) => {
+    document.body.dataset.state = s;
+    $('hint').textContent = STATE_LABEL[s];
+  },
+  onUserText: (text) => caption('user', text),
+  onAgentText: (text) => caption('agent', text || '…'),
+  onError: (msg) => showError(msg),
+  onLevel: (level) => $('orb').style.setProperty('--level', level.toFixed(3)),
 });
 
-// ---------------------------------------------------------------- Micro (maintenir pour parler)
-const recorder = new Recorder();
-const mic = $<HTMLButtonElement>('mic');
-let recording = false;
-async function micDown(e: Event) {
-  e.preventDefault();
-  if (recording || busy) return;
-  voice.unlock();
-  voice.stop();
+function caption(kind: 'user' | 'agent', text: string) {
+  const el = $(kind === 'user' ? 'caption-user' : 'caption-agent');
+  el.textContent = text;
+  el.classList.add('visible');
+  if (kind === 'user') $('caption-agent').classList.remove('visible');
+}
+
+let errorTimer: number | undefined;
+function showError(msg: string) {
+  const el = $('error');
+  el.textContent = msg;
+  el.classList.add('visible');
+  clearTimeout(errorTimer);
+  errorTimer = window.setTimeout(() => el.classList.remove('visible'), 7000);
+}
+
+// Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
+async function begin() {
+  if (conversation.current !== 'off') return;
   try {
-    await recorder.start();
-    recording = true;
-    mic.classList.add('recording');
-    setStatus('Écoute…');
-    avatar?.setExpression('listening', 1);
-  } catch (err) {
-    addMessage('error', `Micro indisponible : ${err instanceof Error ? err.message : err}`);
+    await conversation.start();
+    $('start').classList.add('hidden');
+    if (!breign.configured) showError('Renseignez une clé API et un agent dans les réglages (⚙) pour discuter.');
+  } catch (e) {
+    showError(`Micro indisponible : ${e instanceof Error ? e.message : e}`);
   }
 }
-async function micUp() {
-  if (!recording) return;
-  recording = false;
-  mic.classList.remove('recording');
-  setStatus('Transcription…');
-  try {
-    const wav = await recorder.stop(voice.ctx);
-    const text = await breign.speechToText(wav);
-    if (text.trim()) await ask(text);
-    else setStatus('Rien entendu');
-  } catch (err) {
-    addMessage('error', await describeError(err));
-    setStatus('Erreur');
-  }
-}
-mic.addEventListener('pointerdown', micDown);
-window.addEventListener('pointerup', micUp);
+$('start').addEventListener('click', begin);
+
+// Clavier (facultatif) : « / » ouvre la saisie, Entrée envoie, Échap coupe l'avatar.
+const typeBox = $<HTMLFormElement>('type-box');
+const typeInput = $<HTMLInputElement>('type-input');
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    abort?.abort();
-    voice.stop();
+  if ((e.target as HTMLElement).closest('dialog, input')) {
+    if (e.key === 'Escape' && e.target === typeInput) typeBox.classList.remove('visible');
+    return;
   }
+  if (e.key === 'Escape') conversation.interrupt();
+  if (e.key === '/') {
+    e.preventDefault();
+    typeBox.classList.add('visible');
+    typeInput.focus();
+  }
+});
+typeBox.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = typeInput.value.trim();
+  typeInput.value = '';
+  typeBox.classList.remove('visible');
+  if (!text) return;
+  void begin().then(() => conversation.sendText(text));
 });
 
 // ---------------------------------------------------------------- Réglages
@@ -198,17 +136,20 @@ function readForm(): AppSettings {
   };
 }
 
-$('settings-btn').addEventListener('click', () => {
+$('settings-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
   fillForm();
+  conversation.vad.paused = true;
   dialog.showModal();
 });
 
 dialog.addEventListener('close', () => {
+  conversation.vad.paused = false;
   if (dialog.returnValue !== 'save') return;
   const prevModel = settings.modelUrl;
   settings = readForm();
   saveSettings(settings);
-  applySettings();
+  void applySettings();
   if (settings.modelUrl !== prevModel) void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
 });
 
@@ -231,38 +172,34 @@ $<HTMLSelectElement>('agent-list').addEventListener('change', (e) => {
 
 $('demo').addEventListener('click', () => {
   voice.unlock();
-  voice.stop();
+  conversation.interrupt();
   voice.lang = (form.elements.namedItem('lang') as HTMLSelectElement).value;
+  avatar?.setMode('speaking');
   avatar?.setExpression('happy', 0.5);
-  const demo =
+  voice.say(
     voice.lang === 'fr'
-      ? 'Bonjour ! Je suis votre avatar Breign. Posez-moi une question, je vous réponds de vive voix.'
-      : 'Hello! I am your Breign avatar. Ask me anything and I will answer out loud.';
-  voice.say(demo);
+      ? 'Bonjour ! Je suis votre avatar Breign. Parlez-moi simplement, je vous écoute, et vous pouvez me couper la parole quand vous voulez.'
+      : 'Hello! I am your Breign avatar. Just talk to me, I am listening, and feel free to interrupt me at any time.',
+  );
 });
 
 async function applySettings() {
   breign = new BreignService(settings);
   voice.lang = settings.lang;
-  if (!breign.configured) {
-    setStatus('Non connecté');
-    return;
-  }
-  setStatus('Connexion…');
+  if (!breign.configured) return;
   try {
     const agent = await breign.getAgent();
     $('agent-name').textContent = agent.name;
-    setStatus('Connecté');
   } catch (e) {
-    setStatus('Erreur');
-    addMessage('error', await describeError(e));
+    showError(await describeError(e));
   }
 }
 
 // ---------------------------------------------------------------- Démarrage
+document.body.dataset.state = 'off';
 void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
 void applySettings();
 
 // Accès console pour le débogage.
-Object.assign(window, { stage, voice, THREE });
+Object.assign(window, { stage, voice, conversation, THREE });
 Object.defineProperty(window, 'avatar', { get: () => avatar });

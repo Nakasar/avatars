@@ -3,8 +3,9 @@
 Avatar 3D réaliste dans le navigateur (Three.js), connecté à la plateforme
 [Breign](https://breign.eu) via le SDK [`@breign/client`](https://www.npmjs.com/package/@breign/client).
 
-L'avatar écoute (micro ou texte), envoie le message à un agent Breign, puis répond de vive voix
-avec un lipsync, des expressions et un regard vivants.
+La conversation se fait à la voix, sans bouton : l'avatar écoute en continu, détecte quand vous
+avez fini de parler, réfléchit (et en a l'air), puis répond de vive voix. Vous pouvez lui couper
+la parole à tout moment.
 
 ## Démarrage
 
@@ -29,11 +30,35 @@ Les mêmes valeurs peuvent venir de `.env.local` (voir `.env.example`) ou de l'U
 
 Le bouton « Tester la voix » des réglages fait parler l'avatar sans connexion à Breign.
 
+## Conversation vocale
+
+Un premier geste (« Commencer la conversation ») autorise le micro et le son, puis plus aucun
+bouton n'est nécessaire :
+
+- **Détection de la voix** (`conversation/VoiceActivity.ts`) : niveau mesuré par trames de 20 ms
+  face à un bruit de fond estimé en continu. La parole démarre après 160 ms de voix, avec 400 ms
+  de pré-écoute pour ne pas couper la première syllabe, et le tour se termine après 750 ms de
+  silence. Une courte pause au milieu d'une phrase ne coupe donc pas le tour.
+- **Interruption** : si vous parlez pendant que l'avatar parle, il se tait aussitôt et vous
+  écoute. Pendant qu'il parle, le seuil est relevé (+9 dB, 320 ms) pour que l'écho résiduel ne
+  le coupe pas lui-même (l'annulation d'écho du navigateur est activée).
+- **Phrase reprise** : si vous reprenez la parole pendant qu'il réfléchit, la réponse en cours
+  est abandonnée et votre nouvelle phrase est ajoutée à la précédente.
+- **Attitudes** (`Avatar.setMode`) :
+  - écoute : penché vers vous, regard sur vos yeux, sourcils qui réagissent à votre voix, hochement de tête à la fin de votre phrase ;
+  - réflexion : regard détourné vers le haut sur le côté, tête inclinée, sourcil froncé, lèvres qui se pincent, clignements plus lents ;
+  - parole : regard qui s'échappe brièvement de temps en temps.
+- Sous-titres de la conversation et témoin d'état en bas de l'écran. `/` ouvre une saisie au
+  clavier, `Échap` coupe l'avatar.
+
 ## Architecture
 
 ```
 src/
-  main.ts                  assemblage : scène, avatar, voix, chat, micro, réglages
+  main.ts                  assemblage : scène, avatar, conversation, sous-titres, réglages
+  conversation/
+    Conversation.ts        tours de parole, interruptions, état de l'avatar
+    VoiceActivity.ts       écoute continue du micro, détection de voix, WAV 16 kHz
   settings.ts              réglages (env → navigateur → URL)
   scene/Stage.ts           rendu : tone mapping AgX, IBL, éclairage 3 points, ombres douces,
                            MSAA, GTAO, bloom léger, finition photo (vignettage, grain)
@@ -43,7 +68,7 @@ src/
                            cornée (clearcoat), dents, tissus, cheveux (alpha-to-coverage)
   avatar/lipsync.ts        lipsync audio (analyse spectrale) et textuel (graphèmes → visèmes)
   avatar/visemes.ts        visèmes Oculus et leur équivalent ARKit
-  avatar/Voice.ts          file de phrases, synthèse Breign ou navigateur, enregistrement WAV
+  avatar/Voice.ts          file de phrases, synthèse Breign ou navigateur
   breign/BreignService.ts  appels Breign via @breign/client
 ```
 
@@ -84,3 +109,7 @@ npx @gltf-transform/cli optimize in.glb out.glb --compress meshopt --texture-com
 - Le lipsync audio est une heuristique spectrale ; un lipsync fourni par Breign (visèmes
   horodatés), s'il est exposé, serait plus précis.
 - En production, l'API doit autoriser l'origine du site (CORS) ou être servie derrière un proxy.
+- Une réponse interrompue reste dans l'historique de la conversation côté Breign (la génération
+  n'est pas annulée sur le serveur, seulement ignorée).
+- La détection de voix se base sur l'énergie : dans une pièce très bruyante, un modèle de VAD
+  neuronal (Silero) serait plus fiable. Les seuils sont réglables dans `DEFAULT_VAD`.

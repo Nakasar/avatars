@@ -9,6 +9,12 @@ import type { VisemeFrame } from './lipsync';
 
 export type Expression = 'neutral' | 'happy' | 'thinking' | 'surprised' | 'sad' | 'listening';
 
+/**
+ * Attitude de l'avatar dans la conversation. Elle pilote le regard, la tête et les
+ * micro-expressions, indépendamment de l'expression affichée.
+ */
+export type Mode = 'idle' | 'listening' | 'thinking' | 'speaking';
+
 const EXPRESSIONS: Record<Expression, Weights> = {
   neutral: {},
   happy: {
@@ -71,8 +77,18 @@ export class Avatar {
   private speechEnergy = 0;
 
   private blink = { next: 2, t: -1 };
-  private gaze = { target: new THREE.Vector2(), current: new THREE.Vector2(), next: 0.5 };
+  private gaze = { target: new THREE.Vector2(), current: new THREE.Vector2(), next: 0.5, speed: 25 };
   private lookAtWorld?: THREE.Vector3;
+
+  private mode: Mode = 'idle';
+  private modeTime = 0;
+  /** Côté vers lequel l'avatar détourne le regard quand il réfléchit (change à chaque fois). */
+  private thinkSide = 1;
+  private headOffset = new THREE.Euler();
+  private headTarget = new THREE.Euler();
+  private nodT = -1;
+  private userLevel = 0;
+  private thinkMouth = { next: 1, t: -1, shape: 'mouthPress' };
 
   static async load(url: string, renderer: THREE.WebGLRenderer): Promise<Avatar> {
     const loader = new GLTFLoader();
@@ -185,6 +201,31 @@ export class Avatar {
     this.speechEnergy = energy;
   }
 
+  setMode(mode: Mode) {
+    if (mode === this.mode) return;
+    if (mode === 'thinking') {
+      this.thinkSide = Math.random() < 0.5 ? -1 : 1;
+      this.gaze.next = 0; // détourne le regard tout de suite
+    }
+    if (mode !== 'thinking' && this.mode === 'thinking') this.gaze.next = 0; // et revient vers nous
+    this.mode = mode;
+    this.modeTime = 0;
+  }
+
+  get currentMode() {
+    return this.mode;
+  }
+
+  /** Petit hochement de tête d'acquiescement (écoute active). */
+  nod() {
+    if (this.nodT < 0) this.nodT = 0;
+  }
+
+  /** Niveau de la voix de l'utilisateur (0–1) : l'avatar réagit quand on lui parle. */
+  setUserLevel(level: number) {
+    this.userLevel = level;
+  }
+
   /** Point que l'avatar regarde (typiquement la caméra). */
   lookAt(world: THREE.Vector3) {
     this.lookAtWorld = world;
@@ -222,7 +263,7 @@ export class Avatar {
     b.next -= dt;
     if (b.next <= 0 && b.t < 0) {
       b.t = 0;
-      b.next = 2 + Math.random() * 4;
+      b.next = this.mode === 'thinking' ? 3 + Math.random() * 5 : 2 + Math.random() * 4;
       if (Math.random() < 0.15) b.next = 0.25;
     }
     if (b.t >= 0) {
@@ -243,28 +284,120 @@ export class Avatar {
     add('browOuterUp_L', this.speechEnergy * 0.12);
     add('browOuterUp_R', this.speechEnergy * 0.12);
 
-    // Regard : fixe la caméra avec de petites saccades.
+    this.modeTime += dt;
+    this.updateModeFace(dt, add);
+
+    // Regard : fixe la caméra avec de petites saccades, ou se détourne pour réfléchir.
     const g = this.gaze;
     g.next -= dt;
-    if (g.next <= 0) {
-      g.next = 0.4 + Math.random() * 2.2;
-      const r = Math.random() < 0.7 ? 0.04 : 0.14;
-      g.target.set((Math.random() * 2 - 1) * r, (Math.random() * 2 - 1) * r * 0.6);
-    }
-    g.current.lerp(g.target, Math.min(1, dt * 25));
+    if (g.next <= 0) this.pickGazeTarget();
+    g.current.lerp(g.target, Math.min(1, dt * g.speed));
     this.applyGaze(g.current, add);
 
     this.applyWeights(w);
 
-    // Tête : léger balancement + hochements liés à l'énergie de la voix.
-    const yaw = 0.035 * noise(t * 0.21 + 3) + 0.02 * this.speechEnergy * noise(t * 1.7);
-    const pitch = 0.025 * noise(t * 0.17) - 0.03 * this.speechEnergy * Math.max(0, noise(t * 2.3 + 1));
-    const roll = 0.015 * noise(t * 0.13 + 7);
+    // Tête : posture propre au mode, balancement, hochements liés à la voix.
+    const ht = this.headTarget;
+    if (this.mode === 'thinking') {
+      // Tête légèrement inclinée et tournée du côté où part le regard, menton relevé.
+      ht.set(-0.06, 0.07 * this.thinkSide, -0.05 * this.thinkSide);
+    } else if (this.mode === 'listening') {
+      // Penché vers l'interlocuteur, petite inclinaison attentive.
+      ht.set(0.035, 0, 0.03 + 0.015 * this.userLevel);
+    } else {
+      ht.set(0, 0, 0);
+    }
+    const ho = this.headOffset;
+    const k = Math.min(1, dt * 2.5);
+    ho.set(ho.x + (ht.x - ho.x) * k, ho.y + (ht.y - ho.y) * k, ho.z + (ht.z - ho.z) * k);
+
+    let nod = 0;
+    if (this.nodT >= 0) {
+      this.nodT += dt;
+      nod = Math.sin(Math.min(1, this.nodT / 0.7) * Math.PI * 2) * 0.05 * (1 - this.nodT / 0.7);
+      if (this.nodT > 0.7) this.nodT = -1;
+    }
+    const yaw = ho.y + 0.035 * noise(t * 0.21 + 3) + 0.02 * this.speechEnergy * noise(t * 1.7);
+    const pitch =
+      ho.x + nod + 0.025 * noise(t * 0.17) - 0.03 * this.speechEnergy * Math.max(0, noise(t * 2.3 + 1));
+    const roll = ho.z + 0.015 * noise(t * 0.13 + 7);
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
     this.head!.quaternion.copy(this.headRest).multiply(q);
 
     // Respiration : légère montée du buste.
     this.model.position.y = this.modelRestY + Math.sin(t * 1.6) * 0.0015;
+  }
+
+  private pickGazeTarget() {
+    const g = this.gaze;
+    if (this.mode === 'thinking') {
+      // Regard « introspectif » : en haut sur le côté, avec de petites dérives, et de brefs
+      // retours vers l'interlocuteur.
+      if (this.modeTime > 1.5 && Math.random() < 0.18) {
+        g.target.set(0, 0);
+        g.next = 0.5 + Math.random() * 0.6;
+      } else {
+        const side = Math.random() < 0.85 ? this.thinkSide : -this.thinkSide;
+        g.target.set(side * (0.32 + Math.random() * 0.18), 0.18 + Math.random() * 0.2);
+        g.next = 1.2 + Math.random() * 1.8;
+      }
+      g.speed = 9;
+      return;
+    }
+    g.speed = 25;
+    if (this.mode === 'listening') {
+      // On regarde l'interlocuteur, en alternant entre ses deux yeux.
+      g.target.set((Math.random() < 0.5 ? -1 : 1) * 0.025, (Math.random() - 0.5) * 0.02);
+      g.next = 0.6 + Math.random() * 1.6;
+      return;
+    }
+    if (this.mode === 'speaking' && Math.random() < 0.25) {
+      // En parlant, on détourne parfois brièvement le regard (on cherche ses mots).
+      g.target.set((Math.random() * 2 - 1) * 0.25, (Math.random() * 2 - 1) * 0.12);
+      g.next = 0.5 + Math.random() * 0.7;
+      return;
+    }
+    const r = Math.random() < 0.7 ? 0.04 : 0.14;
+    g.target.set((Math.random() * 2 - 1) * r, (Math.random() * 2 - 1) * r * 0.6);
+    g.next = 0.4 + Math.random() * 2.2;
+  }
+
+  /** Micro-expressions propres à chaque mode. */
+  private updateModeFace(dt: number, add: (k: string, v: number) => void) {
+    if (this.mode === 'thinking') {
+      // Sourcils froncés d'un côté, lèvres qui se pincent ou se tordent par moments.
+      add(this.thinkSide > 0 ? 'browDown_L' : 'browDown_R', 0.18);
+      add('browInnerUp', 0.12);
+      add(this.thinkSide > 0 ? 'eyeSquint_L' : 'eyeSquint_R', 0.15);
+      const m = this.thinkMouth;
+      m.next -= dt;
+      if (m.next <= 0 && m.t < 0) {
+        m.t = 0;
+        m.next = 1.5 + Math.random() * 2.5;
+        m.shape = ['mouthPress', 'mouthRollLower', 'mouthPucker', 'mouthSide'][Math.floor(Math.random() * 4)];
+      }
+      if (m.t >= 0) {
+        m.t += dt;
+        const d = 1.4;
+        const env = Math.sin(Math.min(1, m.t / d) * Math.PI);
+        if (m.shape === 'mouthPress') {
+          add('mouthPress_L', 0.45 * env);
+          add('mouthPress_R', 0.45 * env);
+        } else if (m.shape === 'mouthSide') {
+          add(this.thinkSide > 0 ? 'mouthLeft' : 'mouthRight', 0.35 * env);
+        } else {
+          add(m.shape, 0.35 * env);
+        }
+        if (m.t > d) m.t = -1;
+      }
+    } else if (this.mode === 'listening') {
+      // Attentif : sourcils un peu relevés quand on lui parle, léger sourire.
+      add('browInnerUp', 0.08 + 0.12 * this.userLevel);
+      add('browOuterUp_L', 0.08 * this.userLevel);
+      add('browOuterUp_R', 0.08 * this.userLevel);
+      add('eyeWide_L', 0.06);
+      add('eyeWide_R', 0.06);
+    }
   }
 
   private applyGaze(offset: THREE.Vector2, add: (k: string, v: number) => void) {

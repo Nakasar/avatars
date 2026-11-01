@@ -12,19 +12,32 @@
     <div id="loading" class="loading">Chargement de l’avatar…</div>
 
     <header class="topbar">
-      <div class="brand"><span class="dot"></span><span id="agent-name">Avatar Breign</span></div>
-      <div class="status" id="status">Non connecté</div>
+      <div class="brand"><span id="agent-name">Avatar Breign</span></div>
       <button id="settings-btn" class="icon" title="Réglages" aria-label="Réglages">⚙</button>
     </header>
 
-    <section class="chat" aria-live="polite">
-      <div id="messages" class="messages"></div>
-      <form id="composer" class="composer">
-        <button type="button" id="mic" class="icon" title="Parler (maintenir)" aria-label="Parler">🎙</button>
-        <input id="input" type="text" autocomplete="off" placeholder="Écrivez à l’avatar…" />
-        <button type="submit" id="send">Envoyer</button>
-      </form>
+    <!-- Sous-titres de la conversation -->
+    <section class="captions" aria-live="polite">
+      <p id="caption-user" class="caption user"></p>
+      <p id="caption-agent" class="caption agent"></p>
     </section>
+
+    <!-- Indicateur d'état : pas de bouton, juste un témoin d'écoute -->
+    <div class="presence">
+      <div id="orb" class="orb" aria-hidden="true"><span></span></div>
+      <div id="hint" class="hint">Touchez l’écran pour commencer</div>
+    </div>
+
+    <div id="error" class="error" role="alert"></div>
+
+    <button id="start" class="start" aria-label="Commencer la conversation">
+      <span class="start-title">Commencer la conversation</span>
+      <span class="start-sub">Autorisez le micro, puis parlez naturellement. Vous pouvez couper la parole à l’avatar à tout moment.</span>
+    </button>
+
+    <form id="type-box" class="type-box">
+      <input id="type-input" type="text" autocomplete="off" placeholder="Écrire plutôt que parler… (Entrée)" />
+    </form>
 
     <dialog id="settings">
       <form method="dialog" id="settings-form">

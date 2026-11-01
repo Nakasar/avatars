@@ -23,12 +23,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 .topbar {
   position: fixed; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; gap: 12px;
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
-body.speaking .dot { background: var(--accent); box-shadow: 0 0 12px var(--accent); }
-body.thinking .dot { background: #7fb2ff; animation: pulse 1s infinite alternate; }
-@keyframes pulse { to { opacity: 0.35; } }
-.status { margin-left: auto; color: var(--muted); font-size: 13px; }
+.brand { font-weight: 600; font-size: 15px; margin-right: auto; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6); }
 
 button, input, select {
   font: inherit; color: inherit; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
@@ -36,32 +31,69 @@ button, input, select {
 }
 button { cursor: pointer; }
 button:hover { background: rgba(255, 255, 255, 0.12); }
-button.primary, #send { background: var(--accent); color: #1b1410; border-color: transparent; font-weight: 600; }
+button.primary { background: var(--accent); color: #1b1410; border-color: transparent; font-weight: 600; }
 button.icon { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; font-size: 17px; }
-#mic.recording { background: #c8463c; color: white; }
 
-.chat {
-  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-  width: min(720px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 10px;
+/* Sous-titres */
+.captions {
+  position: fixed; left: 50%; bottom: 112px; transform: translateX(-50%);
+  width: min(760px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 8px;
+  align-items: center; text-align: center; pointer-events: none;
 }
-.messages {
-  max-height: 32vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
-  mask-image: linear-gradient(to bottom, transparent, black 24px);
-  padding-top: 24px;
+.caption {
+  margin: 0; padding: 7px 14px; border-radius: 12px; font-size: 15px; line-height: 1.45;
+  background: rgba(10, 9, 8, 0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  opacity: 0; transform: translateY(6px); transition: opacity 0.35s, transform 0.35s;
+  max-height: 7.5em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
 }
-.msg {
-  max-width: 85%; padding: 9px 13px; border-radius: 14px; background: var(--panel);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--border);
-  font-size: 14px; line-height: 1.45; white-space: pre-wrap;
+.caption.visible { opacity: 1; transform: none; }
+.caption.user { color: var(--muted); font-size: 13px; font-style: italic; }
+
+/* Témoin de présence */
+.presence {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
 }
-.msg.user { align-self: flex-end; background: rgba(231, 168, 107, 0.18); }
-.msg.error { border-color: rgba(200, 70, 60, 0.6); color: #ffb4ab; }
-.composer {
-  display: flex; gap: 8px; padding: 8px; border-radius: 16px; background: var(--panel);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--border);
+.orb {
+  --level: 0; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border); transition: background 0.4s;
 }
-.composer input { flex: 1; min-width: 0; background: transparent; border-color: transparent; }
-.composer input:focus { outline: none; }
+.orb span {
+  width: 14px; height: 14px; border-radius: 50%; background: var(--muted);
+  transform: scale(calc(1 + var(--level) * 1.6)); transition: transform 0.08s, background 0.4s;
+}
+.hint { font-size: 12px; color: var(--muted); letter-spacing: 0.03em; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7); }
+body[data-state='user-speaking'] .orb span { background: #8fd18a; box-shadow: 0 0 16px #8fd18a; }
+body[data-state='thinking'] .orb span,
+body[data-state='transcribing'] .orb span { background: #7fb2ff; animation: think 1.2s ease-in-out infinite; }
+body[data-state='speaking'] .orb span { background: var(--accent); box-shadow: 0 0 14px var(--accent); }
+@keyframes think { 50% { transform: scale(1.5); opacity: 0.5; } }
+
+.error {
+  position: fixed; top: 68px; left: 50%; transform: translate(-50%, -8px); max-width: calc(100% - 32px);
+  padding: 9px 14px; border-radius: 12px; background: rgba(120, 30, 25, 0.85); color: #ffd9d4;
+  font-size: 13px; opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none;
+}
+.error.visible { opacity: 1; transform: translate(-50%, 0); }
+
+/* Écran de démarrage : un seul geste, puis plus aucun bouton */
+.start {
+  position: fixed; inset: 0; border: 0; border-radius: 0; background: rgba(8, 7, 6, 0.35);
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 0 24px 120px; text-align: center; transition: opacity 0.5s;
+}
+.start:hover { background: rgba(8, 7, 6, 0.3); }
+.start.hidden { opacity: 0; pointer-events: none; }
+.start-title { font-size: 20px; font-weight: 600; }
+.start-sub { font-size: 13px; color: var(--muted); max-width: 420px; }
+
+.type-box {
+  position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px)); display: none;
+}
+.type-box.visible { display: block; }
+.type-box input { width: 100%; background: rgba(20, 19, 18, 0.85); backdrop-filter: blur(12px); }
 
 dialog {
   width: min(480px, calc(100% - 32px)); border: 1px solid var(--border); border-radius: 16px;
@@ -78,6 +110,7 @@ dialog code { font-size: 12px; }
 .actions #demo { margin-right: auto; }
 
 @media (max-width: 520px) {
-  .messages { max-height: 26vh; }
-  #send { padding: 9px 10px; }
+  .captions { bottom: 100px; }
+  .caption { font-size: 14px; }
 }
+body[data-state='off'] .presence { opacity: 0; }
