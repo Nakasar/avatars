@@ -16,7 +16,13 @@ Il faut environ 12 minutes avec un GPU (cuisson Cycles et peinture de l'atlas 4K
 - `public/models/human.glb` (export glTF, textures WebP) ;
 - `assets/blender/human.blend`, qui référence les textures de `assets/blender/textures/` ;
 - les rendus de contrôle dans `assets/blender/renders/` (face, trois quarts, profil, expressions) ;
-  `renders/avant/` garde ceux de la première version, `renders/comparatif/` les compare.
+  `renders/avant/` garde ceux de la première version, `renders/comparatif/` les compare ;
+  `renders/sculpt/` compare avant / après la passe de sculpture.
+
+Pour refaire la sculpture du détail (interface graphique de Blender requise, par exemple via
+l'addon MCP) : `import sculpt_detail; sculpt_detail.run("build.blend")` sur un build de la
+pipeline, puis relancer l'export. Sans `detail_delta.npz`, la pipeline cuit la normal map sans
+ce détail.
 
 Sans `--export`, le script produit seulement des rendus de prévisualisation :
 `build_avatar.py -- <préfixe>` ; ajoutez `--fast` pour des textures 4 fois plus petites (≈ 4 min).
@@ -33,6 +39,8 @@ Sans `--export`, le script produit seulement des rendus de prévisualisation :
 | `torso.py` | T-shirt à col rond posé sur un champ de torse. |
 | `materials.py`, `textures.py`, `noise.py` | UV et matériaux PBR. La peau a deux atlas : `Face` (visage, 4096 px) et `Skin` (crâne, cou, oreilles, 2048 px). La position de chaque texel est cuite avec Cycles, puis la peau est peinte en numpy (zones jaune / rouge / bleue, rougeurs, capillaires, veines, taches, grains de beauté, barbe naissante, cuir chevelu, lèvres, intérieurs) ; normal map = rides et plis cuits depuis une copie haute résolution + micro-relief (pores, sillons de Voronoï) ; roughness contrastée (zone T, lèvres, joues). |
 | `roles.py`, `rig.py`, `shapes.py` | Rôles anatomiques des sommets, squelette et poids, 52 shape keys ARKit et 15 visèmes (mêmes compositions que `src/avatar/visemes.ts`). |
+| `sculpt.py` | Passe de sculpture des volumes : coups de pinceau (gonfler / creuser, arêtes / plis) placés à la main sur des repères anatomiques, appliqués comme décalage du champ de la tête (arcades, glabelle, tempes, pommettes, sillons naso-géniens, mâchoire, menton, cou, asymétries). |
+| `sculpt_detail.py` | Sculpture du détail au pinceau dans l'interface de Blender (mode Sculpt, vraies brosses Crease Sharp / Draw Sharp / Inflate sur un modifier Multiresolution niveau 2) : paupières, lèvres, nez, rides, oreilles, cou. Le résultat est enregistré dans `sculpt/detail_delta.npz` et cuit dans la normal map ; `sculpt/sculpt_detail.blend` garde l'objet multirésolution sculpté. |
 | `studio.py` | Plateau de rendu (Cycles, éclairage trois points). |
 | `foldcheck.py` | Contrôle : liste les faces retournées du maillage du visage. |
 

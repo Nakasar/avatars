@@ -15,6 +15,8 @@ LID_T = 0.0016                               # épaisseur des paupières au-dess
 MOUTH_Z = -0.0468                            # stomion
 MOUTH_W = 0.0255                             # demi-largeur de la bouche (cheilion)
 
+import sculpt  # noqa: E402  (après les constantes : sculpt les utilise)
+
 # Sections du loft : z, profondeur médiane avant P, demi-largeur W, position fs de la
 # largeur max, profondeur arrière Bk, exposants (largeur ex, profondeur ey).
 LOFT = np.array([
@@ -153,7 +155,8 @@ def field(p):
     d = nose(p, d)
     d = lips(p, d)
     d = smin(d, neck(p), 0.012)
-    return d
+    # passe de sculpture (coups de pinceau placés sur des repères anatomiques)
+    return d - sculpt.offset(p)
 
 
 def raycast(origins, dirs, fn=field, t_max=0.32, step=0.002, iters=14):

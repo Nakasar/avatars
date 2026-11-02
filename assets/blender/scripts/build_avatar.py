@@ -216,7 +216,7 @@ def join_into(target, others):
     return target
 
 
-def high_res_copy(body):
+def high_res_copy(body, apply_detail=True):
     """Copie subdivisée de la peau, recollée au champ anatomique et ridée."""
     hi = body.copy()
     hi.data = body.data.copy()
@@ -233,9 +233,11 @@ def high_res_copy(body):
     mod = hi.modifiers.new("sub", "SUBSURF")
     mod.levels = 2
     mod.render_levels = 2
-    textures.select_only(hi)
-    bpy.ops.object.modifier_apply(modifier="sub")
-    me = hi.data
+    # subdivision évaluée (sans opérateur : fonctionne aussi dans l'interface graphique)
+    dg = bpy.context.evaluated_depsgraph_get()
+    me = bpy.data.meshes.new_from_object(hi.evaluated_get(dg))
+    hi.modifiers.clear()
+    hi.data = me
     co = np.zeros(len(me.vertices) * 3)
     me.vertices.foreach_get("co", co)
     P = topo.from_blender(co.reshape(-1, 3), BASE)
@@ -247,13 +249,23 @@ def high_res_copy(body):
     nrm = g / np.linalg.norm(g, axis=1, keepdims=True)
     q = q + nrm * textures.wrinkle_displacement(q)[:, None]
     P[on] = q
-    me.vertices.foreach_set("co", to_bl(P).ravel())
+    Q = to_bl(P)
+    # détail sculpté au pinceau (multirésolution, voir sculpt_detail.py), s'il existe
+    det = os.path.normpath(os.path.join(HERE, "..", "sculpt", "detail_delta.npz"))
+    if apply_detail and os.path.exists(det):
+        delta = np.load(det)["delta"]
+        if len(delta) == len(Q):
+            Q = Q + delta
+            print("  détail sculpté appliqué :", round(float(np.abs(delta).max()) * 1000, 2), "mm max")
+        else:
+            print("  détail sculpté ignoré (topologie différente)")
+    me.vertices.foreach_set("co", Q.ravel())
     me.update()
     return hi
 
 
 TEX_SIZES = (2048, 4096)          # emplacements : 0 = Skin (crâne, cou, oreilles), 1 = Face
-TEXEL_MM = (0.22, 0.055)           # taille approximative d'un texel sur la peau (mm)
+TEXEL_MM = (0.22, 0.065)           # taille approximative d'un texel sur la peau (mm)
 
 
 def texture_stage(body, objs):
@@ -416,13 +428,13 @@ EXPORT_OBJECTS = ["Body", "Eyeball_L", "Eyeball_R", "Cornea_L", "Cornea_R", "Car
                   "Eyelashes", "Shirt"]
 
 
-def export_glb(path, arm):
+def export_glb(path, arm, quality=80):
     objs = [bpy.data.objects[n] for n in EXPORT_OBJECTS] + [arm]
     textures.select_only(*objs, active=arm)
     bpy.ops.export_scene.gltf(
         filepath=path, export_format="GLB", use_selection=True, export_apply=False,
         export_yup=True, export_texcoords=True, export_normals=True, export_tangents=False,
-        export_materials="EXPORT", export_image_format="WEBP", export_image_quality=88,
+        export_materials="EXPORT", export_image_format="WEBP", export_image_quality=quality,
         export_skins=True, export_morph=True, export_morph_normal=True, export_try_sparse_sk=True,
         export_animations=False, export_cameras=False, export_lights=False)
 

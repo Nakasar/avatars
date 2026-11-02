@@ -34,7 +34,9 @@ def unwrap_body(body):
             return 3
         if abs(x) > 0.066 and f < 0.03 and -0.03 < z < 0.05 and fv > 0.0015:
             return 4                      # oreilles (hors surface du crâne)
-        if f > 0.035 and z > -0.112 and z < 0.098 and abs(x) < 0.066:
+        # visage jusqu'aux oreilles et sous la mâchoire : la couture entre les deux atlas
+        # passe devant les oreilles, sous le cuir chevelu et sur le cou, là où elle se voit peu
+        if (f > 0.0 or (f > -0.012 and z < -0.05)) and -0.135 < z < 0.100 and abs(x) < 0.082:
             return 1                      # visage
         return 2                          # crâne, cou
 

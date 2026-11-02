@@ -162,9 +162,7 @@ def save_image(name, arr, path, srgb=True, alpha=None, fmt="PNG"):
     img.pixels.foreach_set(rgba.ravel())
     img.filepath_raw = path
     img.file_format = fmt
-    if fmt == "WEBP":
-        bpy.context.scene.render.image_settings.quality = 95
-    img.save(quality=95) if fmt == "WEBP" else img.save()
+    img.save(quality=82) if fmt == "WEBP" else img.save()
     return img
 
 
