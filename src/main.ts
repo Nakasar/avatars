@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Stage } from './scene/Stage';
 import { Avatar } from './avatar/Avatar';
+import type { Character } from './avatar/Character';
+import { Orb, ORB_PALETTES } from './orb/Orb';
 import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
@@ -16,24 +18,49 @@ const stage = new Stage($('stage'), {
 let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
-let avatar: Avatar | undefined;
+let avatar: Character | undefined;
 const DEFAULT_MODEL = '/models/human.glb';
 
-// ---------------------------------------------------------------- Avatar
-async function loadAvatar(url: string) {
-  $('loading').classList.remove('hidden');
+// ---------------------------------------------------------------- Apparence (humain ou orbe)
+let shown = '';
+let loadToken = 0;
+
+/** Affiche l'apparence demandée ; ne recharge que si elle change vraiment. */
+async function showCharacter(s: Pick<AppSettings, 'appearance' | 'orbColor' | 'modelUrl'>) {
+  const key = s.appearance === 'orb' ? 'orb' : `human:${s.modelUrl || DEFAULT_MODEL}`;
+  if (key === shown) {
+    if (avatar instanceof Orb) {
+      avatar.setColor(s.orbColor);
+      stage.setLook('holo', ORB_PALETTES[s.orbColor].main);
+    }
+    return;
+  }
+  shown = key;
+  const token = ++loadToken;
+  $('loading').classList.toggle('hidden', s.appearance === 'orb');
   try {
-    const next = await Avatar.load(url, stage.renderer);
-    if (avatar) stage.scene.remove(avatar.root);
+    const next: Character =
+      s.appearance === 'orb' ? new Orb(s.orbColor) : await Avatar.load(s.modelUrl || DEFAULT_MODEL, stage.renderer);
+    if (token !== loadToken) return next.dispose?.(); // une autre apparence a été choisie entre-temps
+    const mode = avatar?.currentMode ?? 'idle';
+    if (avatar) {
+      stage.scene.remove(avatar.root);
+      avatar.dispose?.();
+    }
     avatar = next;
     stage.scene.add(avatar.root);
+    stage.setLook(s.appearance === 'orb' ? 'holo' : 'studio', ORB_PALETTES[s.orbColor].main);
     stage.frame(avatar.root, avatar.root.localToWorld(avatar.focus.clone()), avatar.framingHeight);
+    avatar.setMode(mode);
     avatar.setExpression('listening', 0.6);
-    console.info('[avatar] blendshapes :', avatar.morphTargetNames.length, avatar.morphTargetNames);
+    if (avatar instanceof Avatar) {
+      console.info('[avatar] blendshapes :', avatar.morphTargetNames.length, avatar.morphTargetNames);
+    }
   } catch (e) {
+    shown = '';
     showError(`Impossible de charger le modèle 3D : ${e instanceof Error ? e.message : e}`);
   } finally {
-    $('loading').classList.add('hidden');
+    if (token === loadToken) $('loading').classList.add('hidden');
   }
 }
 
@@ -130,10 +157,21 @@ const form = $<HTMLFormElement>('settings-form');
 
 function fillForm() {
   for (const [k, v] of Object.entries(settings)) {
+    if (typeof v === 'object') continue;
     const el = form.elements.namedItem(k) as HTMLInputElement | null;
     if (el) el.value = v ?? '';
   }
+  form.dataset.look = settings.appearance;
 }
+
+// Aperçu en direct : l'apparence et la couleur changent dès qu'on les choisit.
+form.addEventListener('change', (e) => {
+  const name = (e.target as HTMLInputElement).name;
+  if (name !== 'appearance' && name !== 'orbColor') return;
+  const draft = readForm();
+  form.dataset.look = draft.appearance;
+  void showCharacter({ ...draft, modelUrl: settings.modelUrl });
+});
 function readForm(): AppSettings {
   const data = new FormData(form);
   return {
@@ -194,8 +232,7 @@ $('logout').addEventListener('click', async () => {
 
 dialog.addEventListener('close', () => {
   conversation.vad.paused = false;
-  if (dialog.returnValue !== 'save') return;
-  const prevModel = settings.modelUrl;
+  if (dialog.returnValue !== 'save') return void showCharacter(settings); // annule l'aperçu
   const next = readForm();
   // Une clé changée à la main n'est plus celle du compte connecté.
   if (next.apiKey !== settings.apiKey) next.account = undefined;
@@ -203,7 +240,7 @@ dialog.addEventListener('close', () => {
   saveSettings(settings);
   renderAccount();
   void applySettings();
-  if (settings.modelUrl !== prevModel) void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
+  void showCharacter(settings);
 });
 
 $('load-agents').addEventListener('click', async () => {
@@ -253,7 +290,7 @@ async function applySettings() {
 
 // ---------------------------------------------------------------- Démarrage
 document.body.dataset.state = 'off';
-void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
+void showCharacter(settings);
 
 async function boot() {
   try {
