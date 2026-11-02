@@ -1,0 +1,26 @@
+{
+  "name": "breign-avatars",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Avatar 3D réaliste dans le navigateur (Three.js), connecté à la plateforme Breign",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "setup": "node scripts/setup-assets.mjs",
+    "postinstall": "node scripts/setup-assets.mjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@breign/client": "^1.0.198",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
