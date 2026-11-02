@@ -82,3 +82,31 @@ def pores2(shape, density, radius, seed=0):
             wgt = np.exp(-(dx * dx + dy * dy) / (2 * radius * radius))
             np.add.at(out, ((ys + dy) % h, (xs + dx) % w), -amp * wgt)
     return out
+
+
+def voronoi_edges(shape, cell, seed=0, block=256):
+    """Distance F2 − F1 d'un diagramme de Voronoï (une cellule ~ `cell` px) : réseau de
+    sillons polygonaux, comme le micro-relief de la peau. Retourne un tableau en pixels."""
+    h, w = shape
+    rng = np.random.default_rng(seed)
+    gh, gw = int(np.ceil(h / cell)) + 2, int(np.ceil(w / cell)) + 2
+    jit = rng.uniform(0, 1, (gh, gw, 2))
+    out = np.zeros(shape, np.float32)
+    xs = np.arange(w)
+    for y0 in range(0, h, block):
+        ys = np.arange(y0, min(y0 + block, h))
+        Y, X = np.meshgrid(ys, xs, indexing="ij")
+        cy, cx = Y // cell, X // cell
+        f1 = np.full(Y.shape, 1e9, np.float32)
+        f2 = np.full(Y.shape, 1e9, np.float32)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                gy = np.clip(cy + dy, 0, gh - 1)
+                gx = np.clip(cx + dx, 0, gw - 1)
+                py = (gy + jit[gy, gx, 0]) * cell
+                px = (gx + jit[gy, gx, 1]) * cell
+                d = np.hypot(py - Y, px - X).astype(np.float32)
+                f2 = np.where(d < f1, f1, np.minimum(f2, d))
+                f1 = np.minimum(f1, d)
+        out[ys[0]:ys[-1] + 1] = f2 - f1
+    return out

@@ -90,6 +90,18 @@ def cornea(s):
     return np.array(verts), faces, uv
 
 
+def caruncle(corner, s):
+    """Caroncule lacrymale : petit ellipsoïde rose logé dans le canthus médial."""
+    c = hs.EYE_C * np.array([s, 1, 1])
+    m = np.asarray(corner, float)
+    toward = (c - m)
+    toward[1] = 0
+    toward /= np.linalg.norm(toward)
+    centre = m + toward * 0.0016 + np.array([0, -0.0012, 0])
+    v, f = superellipsoid(0.0014, 0.0011, 0.0019, 0.9, 0.9, nu=10, nv=7)
+    return centre + v, f, None
+
+
 # --- Dents ------------------------------------------------------------------------------
 UPPER = dict(f0=0.0905, half=0.0265, depth=0.040, edge=hs.MOUTH_Z - 0.0006, sign=1)
 LOWER = dict(f0=0.0880, half=0.0240, depth=0.038, edge=hs.MOUTH_Z + 0.0010, sign=-1)

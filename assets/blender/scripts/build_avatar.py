@@ -166,7 +166,9 @@ def build_parts():
 def build_hair(groups):
     objs = {}
     mat = clay("HairTmp", tuple(hair.HAIR_COLOR * 3), 0.6)
-    v, f, uv = hair.hair_cards()
+    guides, widths = hair.hair_guides()
+    make_hair_curves("HairGuides", guides)
+    v, f, uv = hair.cards_from_guides(guides, widths)
     objs["Hair"] = make_object("Hair", v, f, uv, material=mat, recalc=False)
     v, f, uv = hair.brow_cards()
     objs["Eyebrows"] = make_object("Eyebrows", v, f, uv, material=mat, recalc=False)
@@ -179,17 +181,32 @@ def build_hair(groups):
             vs += v.tolist()
             uvs += uv
     objs["Eyelashes"] = make_object("Eyelashes", np.array(vs), fs, uvs, material=clay("LashTmp", (0.01, 0.01, 0.01)), recalc=False)
+    # caroncules : petit relief rose au coin interne de l'œil
+    for s, tag in ((1, "L"), (-1, "R")):
+        v, f, _ = parts.caruncle(groups["margins"][f"eye{s}_up"][0], s)
+        objs[f"Caruncle_{tag}"] = make_object(f"Caruncle_{tag}", v, f, material=clay("GumTmp", (0.7, 0.3, 0.3), 0.3))
     return objs
 
 
+def make_hair_curves(name, guides):
+    """Guides des mèches en objet Hair Curves (source des cartes ; non exporté)."""
+    cv = bpy.data.hair_curves.new(name)
+    cv.add_curves([len(g) for g in guides])
+    pos = to_bl(np.concatenate(guides))
+    cv.attributes["position"].data.foreach_set("vector", pos.astype(np.float32).ravel())
+    ob = bpy.data.objects.new(name, cv)
+    collection().objects.link(ob)
+    ob.hide_render = True
+    return ob
+
+
 TEX_DIR = os.path.normpath(os.path.join(HERE, "..", "textures"))
-TEX = 2048
 
 
 def save_tex(name, arr, srgb=True, alpha=None):
     os.makedirs(TEX_DIR, exist_ok=True)
-    path = os.path.join(TEX_DIR, name + ".png")
-    img = textures.save_image(name, arr, path, srgb=srgb, alpha=alpha)
+    path = os.path.join(TEX_DIR, name + ".webp")
+    img = textures.save_image(name, arr, path, srgb=srgb, alpha=alpha, fmt="WEBP")
     return img
 
 
@@ -223,7 +240,7 @@ def high_res_copy(body):
     me.vertices.foreach_get("co", co)
     P = topo.from_blender(co.reshape(-1, 3), BASE)
     fv = head_shape.field(P)
-    on = np.abs(fv) < 0.0010
+    on = np.abs(fv) < 0.0035
     q = P[on]
     q = build_head.snap(q, 3)
     g = build_head.gradient(q)
@@ -235,36 +252,51 @@ def high_res_copy(body):
     return hi
 
 
+TEX_SIZES = (2048, 4096)          # emplacements : 0 = Skin (crâne, cou, oreilles), 1 = Face
+TEXEL_MM = (0.22, 0.055)           # taille approximative d'un texel sur la peau (mm)
+
+
 def texture_stage(body, objs):
     t0 = time.time()
+    body.data.materials.clear()
+    body.data.materials.append(clay("ClayRest", (0.62, 0.45, 0.38)))
+    body.data.materials.append(clay("ClayFace", (0.62, 0.45, 0.38)))
     materials.unwrap_body(body)
-    Pw, mask = textures.bake_attribute(body, TEX, "POS")
-    Nw, _ = textures.bake_attribute(body, TEX, "NRM")
-    Iw, _ = textures.bake_attribute(body, TEX, "interior")
+    pos = textures.bake_attribute(body, TEX_SIZES, "POS")
+    nrm = textures.bake_attribute(body, TEX_SIZES, "NRM")
+    inner = textures.bake_attribute(body, TEX_SIZES, "interior")
     print("  bake pos/nrm", time.time() - t0)
-    ao = textures.bake_ao(body, TEX, samples=96)
+    hide = [objs["Eyelashes"], objs["Eyebrows"]]
+    aos = textures.bake_ao(body, TEX_SIZES, samples=96, hide=hide)
     print("  bake ao", time.time() - t0)
     hi = high_res_copy(body)
-    nrm_mid = textures.bake_normals_from(hi, body, TEX, extrusion=0.0015, distance=0.005)
+    mids = textures.bake_normals_from(hi, body, TEX_SIZES, extrusion=0.0015, distance=0.005)
     bpy.data.objects.remove(hi)
     print("  bake normals", time.time() - t0)
-    albedo, rough, pore_w, lipm, _ = textures.skin_maps(Pw, Nw, mask, ao, TEX, Iw[..., 0])
-    nrm_mid = np.where(mask[..., None], nrm_mid, np.array([0, 0, 1.0]))
-    # normales aberrantes (faces très fines aux commissures) : ramenées vers la normale plate
-    bad = np.clip((0.75 - nrm_mid[..., 2]) / 0.25, 0, 1)[..., None]
-    nrm_mid = nrm_mid * (1 - bad) + np.array([0, 0, 1.0]) * bad
-    nrm_mid /= np.linalg.norm(nrm_mid, axis=-1, keepdims=True)
-    nrm = textures.combine_normals(nrm_mid, textures.pore_normal(TEX, pore_w, lipm))
-    albedo = textures.dilate(albedo, mask)
-    rough = textures.dilate(rough, mask)
-    aod = textures.dilate(np.clip(ao, 0, 1), mask)
-    nrm = textures.dilate(nrm, mask)
-    print("  paint", time.time() - t0)
-    i_alb = save_tex("skin_albedo", albedo)
-    i_nrm = save_tex("skin_normal", nrm * 0.5 + 0.5, srgb=False)
-    orm = np.stack([0.35 + 0.65 * aod, rough, np.zeros_like(rough)], -1)
-    i_orm = save_tex("skin_orm", orm, srgb=False)
-    materials.set_material(body, materials.skin_material(i_alb, i_nrm, i_orm))
+    mats = []
+    for k, (name, size) in enumerate(zip(("skin", "face"), TEX_SIZES)):
+        (Pw, mask), (Nw, _), (Iw, _) = pos[k], nrm[k], inner[k]
+        micro = textures.micro_relief(size, TEXEL_MM[k])
+        albedo, rough, pore_w, lipm = textures.skin_maps(Pw, Nw, mask, aos[k], size, Iw[..., 0], micro)
+        nm = np.where(mask[..., None], mids[k], np.array([0, 0, 1.0]))
+        # normales aberrantes (faces très fines aux commissures) : ramenées vers la normale plate
+        bad = np.clip((0.75 - nm[..., 2]) / 0.25, 0, 1)[..., None]
+        nm = nm * (1 - bad) + np.array([0, 0, 1.0]) * bad
+        nm /= np.linalg.norm(nm, axis=-1, keepdims=True)
+        nm = textures.combine_normals(nm, textures.pore_normal(micro, pore_w, lipm, TEXEL_MM[k]))
+        albedo = textures.dilate(albedo, mask)
+        rough = textures.dilate(rough, mask)
+        aod = textures.dilate(np.clip(aos[k], 0, 1), mask)
+        nm = textures.dilate(nm, mask)
+        i_alb = save_tex(f"{name}_albedo", albedo)
+        i_nrm = save_tex(f"{name}_normal", nm * 0.5 + 0.5, srgb=False)
+        orm = np.stack([0.35 + 0.65 * aod, rough, np.zeros_like(rough)], -1)
+        i_orm = save_tex(f"{name}_orm", orm, srgb=False)
+        mats.append(materials.skin_material(i_alb, i_nrm, i_orm, name="Skin" if k == 0 else "Face"))
+        print(f"  peinture {name}", time.time() - t0)
+    # affectation par emplacement (vider la liste remettrait les index de matériau à 0)
+    for slot, m in zip(body.material_slots, mats):
+        slot.material = m
 
     # yeux
     eye = textures.eye_texture(1024)
@@ -278,19 +310,20 @@ def texture_stage(body, objs):
     materials.set_material(objs["TeethUpper"], materials.simple_material("Teeth", (0.80, 0.75, 0.64), 0.32))
     materials.set_material(objs["TeethLower"], bpy.data.materials["Teeth"])
     m_gum = materials.simple_material("Gums", (0.52, 0.17, 0.16), 0.38)
-    materials.set_material(objs["GumsUpper"], m_gum)
-    materials.set_material(objs["GumsLower"], m_gum)
+    for name in ("GumsUpper", "GumsLower", "Caruncle_L", "Caruncle_R"):
+        if name in objs:
+            materials.set_material(objs[name], m_gum)
     materials.set_material(objs["Tongue"], materials.simple_material("Tongue", (0.50, 0.18, 0.17), 0.42))
     # poils
     atlas = hair.strand_atlas(1024)
     i_hair = save_tex("hair_atlas", atlas[..., :3], alpha=atlas[..., 3])
-    materials.set_material(objs["Hair"], materials.alpha_card_material("Hair", i_hair, 0.66))
-    materials.set_material(objs["Eyebrows"], materials.alpha_card_material("Eyebrows", i_hair, 0.72))
+    materials.set_material(objs["Hair"], materials.alpha_card_material("Hair", i_hair, 0.74))
+    materials.set_material(objs["Eyebrows"], materials.alpha_card_material("Eyebrows", i_hair, 0.7))
     materials.set_material(objs["Eyelashes"], materials.alpha_card_material("Eyelashes", i_hair, 0.45))
     # t-shirt
     sh = objs["Shirt"]
     materials.smart_unwrap(sh)
-    Ps, ms = textures.bake_attribute(sh, 1024, "POS")
+    (Ps, ms), = textures.bake_attribute(sh, (1024,), "POS")
     alb, nr = textures.shirt_maps(Ps, ms, 1024)
     alb = textures.dilate(alb, ms)
     i_sa = save_tex("shirt_albedo", alb)
@@ -314,7 +347,7 @@ def rig_stage(objs, body):
         rig.assign(objs[name], arm, {"LeftEye": ones(objs[name])})
     for name in ("Eyeball_R", "Cornea_R"):
         rig.assign(objs[name], arm, {"RightEye": ones(objs[name])})
-    for name in ("TeethUpper", "GumsUpper", "Hair", "Eyebrows", "Eyelashes"):
+    for name in ("TeethUpper", "GumsUpper", "Hair", "Eyebrows", "Eyelashes", "Caruncle_L", "Caruncle_R"):
         rig.assign(objs[name], arm, {"Head": ones(objs[name])})
     for name in ("TeethLower", "GumsLower", "Tongue"):
         rig.assign(objs[name], arm, {"Jaw": ones(objs[name])})
@@ -322,13 +355,18 @@ def rig_stage(objs, body):
     return arm
 
 
-def add_keys(obj, deltas):
-    """deltas : liste (nom, déplacement anatomique N×3)."""
+def add_keys(obj, deltas, prune=False):
+    """deltas : liste (nom, déplacement anatomique N×3). Les déplacements négligeables
+    sont mis à zéro (accesseurs creux à l'export) ; avec prune, les clés sans effet sur
+    l'objet ne sont pas créées (accessoires)."""
     co = np.zeros(len(obj.data.vertices) * 3)
     obj.data.vertices.foreach_get("co", co)
     rest = co.reshape(-1, 3)
     obj.shape_key_add(name="Basis", from_mix=False)
     for name, d in deltas:
+        d = np.where(np.linalg.norm(d, axis=1, keepdims=True) < 2e-5, 0.0, d)
+        if prune and not d.any():
+            continue
         k = obj.shape_key_add(name=name, from_mix=False)
         db = np.stack([d[:, 0], -d[:, 1], d[:, 2]], 1)       # anatomique → Blender
         k.data.foreach_set("co", (rest + db).ravel())
@@ -347,9 +385,9 @@ def shape_stage(objs, body, margins):
     print("  shape keys peau", time.time() - t0)
     for name in ("TeethLower", "GumsLower"):
         Q = rig.anat(objs[name])
-        add_keys(objs[name], [(n, shapes.rigid_delta(Q, w)) for n, w in targets])
+        add_keys(objs[name], [(n, shapes.rigid_delta(Q, w)) for n, w in targets], prune=True)
     Q = rig.anat(objs["Tongue"])
-    add_keys(objs["Tongue"], [(n, shapes.rigid_delta(Q, w, tongue=True)) for n, w in targets])
+    add_keys(objs["Tongue"], [(n, shapes.rigid_delta(Q, w, tongue=True)) for n, w in targets], prune=True)
     # cils et sourcils : collés à la peau
     me = body.data
     nb = [[] for _ in range(len(me.vertices))]
@@ -364,16 +402,18 @@ def shape_stage(objs, body, margins):
         if skin_only[i]:
             tree.insert(p.tolist(), i)
     tree.balance()
-    for name, rows in (("Eyelashes", 3), ("Eyebrows", 1)):
+    for name, rows in (("Eyelashes", 6), ("Eyebrows", 6)):
         Q = rig.anat(objs[name])
         roots = (np.arange(len(Q)) // rows) * rows
         idx = np.array([tree.find(Q[r].tolist())[1] for r in roots])
-        add_keys(objs[name], [(n, shapes.transfer(P, d, nb, idx, Q)) for n, d in body_d])
+        dd = [(n, shapes.transfer(P, d, nb, idx, Q)) for n, d in body_d]
+        add_keys(objs[name], [(n, np.where(np.abs(x) < 4e-5, 0.0, x)) for n, x in dd], prune=True)
     print("  shape keys", time.time() - t0)
 
 
-EXPORT_OBJECTS = ["Body", "Eyeball_L", "Eyeball_R", "Cornea_L", "Cornea_R", "TeethUpper", "TeethLower",
-                  "GumsUpper", "GumsLower", "Tongue", "Hair", "Eyebrows", "Eyelashes", "Shirt"]
+EXPORT_OBJECTS = ["Body", "Eyeball_L", "Eyeball_R", "Cornea_L", "Cornea_R", "Caruncle_L", "Caruncle_R",
+                  "TeethUpper", "TeethLower", "GumsUpper", "GumsLower", "Tongue", "Hair", "Eyebrows",
+                  "Eyelashes", "Shirt"]
 
 
 def export_glb(path, arm):
@@ -425,6 +465,9 @@ RENDER_DIR = os.path.join(REPO, "assets", "blender", "renders")
 if __name__ == "__main__":
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     final = "--export" in argv
+    if "--fast" in argv:  # prévisualisation : textures 4 fois plus petites
+        TEX_SIZES = (1024, 2048)
+        TEXEL_MM = (0.44, 0.11)
     argv = [a for a in argv if not a.startswith("--")]
     out = argv[0] if argv else os.path.join(RENDER_DIR, "preview")
     t0 = time.time()
@@ -452,7 +495,8 @@ if __name__ == "__main__":
         studio.montage(paths, out + "_close.png")
         shots = []
         for lab, w in (("jaw", {"jawOpen": 1.0}), ("smile", {"mouthSmileLeft": 1.0, "mouthSmileRight": 1.0}),
-                       ("blink", {"eyeBlinkLeft": 1.0, "eyeBlinkRight": 1.0}), ("O", {"viseme_O": 1.0})):
+                       ("blink", {"eyeBlinkLeft": 1.0, "eyeBlinkRight": 1.0}), ("O", {"viseme_O": 1.0}),
+                       ("press", {"mouthPressLeft": 1.0, "mouthPressRight": 1.0}), ("puff", {"cheekPuff": 1.0})):
             set_expression(w)
             shots.append(studio.shoot(f"{out}_x_{lab}.png", 12, target=(0, -0.08, 1.595), dist=0.42))
         set_expression({})

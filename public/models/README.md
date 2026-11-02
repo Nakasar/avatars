@@ -7,15 +7,16 @@
 
 ## `human.glb`
 
-- Environ 40 600 triangles : peau (tête, cou, oreilles) 18 800, cheveux en cartes alpha 9 400,
-  t-shirt 3 600, puis yeux, cornées, dents, gencives, langue, sourcils et cils.
+- Environ 46 000 triangles : peau (tête, cou, oreilles) 18 800, cheveux en cartes alpha 13 000,
+  t-shirt 3 600, sourcils et cils poil par poil 4 000, puis yeux, cornées, caroncules, dents,
+  gencives et langue.
 - 67 shape keys : les 52 blendshapes ARKit (`eyeBlinkLeft`, `jawOpen`, `mouthSmileLeft`…) et les
-  15 visèmes Oculus (`viseme_sil` … `viseme_U`). Les dents du bas, la langue, les cils et les
-  sourcils portent les mêmes shape keys et suivent la peau.
+  15 visèmes Oculus (`viseme_sil` … `viseme_U`) sur la peau. Les dents du bas, la langue, les cils
+  et les sourcils portent, sous les mêmes noms, les shape keys qui les déplacent et suivent la peau.
 - Squelette : `Hips`, `Spine`, `Spine1`, `Spine2`, `Neck`, `Head`, `LeftEye`, `RightEye`, `Jaw`.
   Les globes oculaires sont pondérés à 100 % sur leurs os.
-- Matériaux PBR, textures WebP : peau 2048 px (couleur, normal map, occlusion/roughness),
-  yeux, atlas de mèches, t-shirt. La diffusion sous-cutanée est ajoutée par l'application
+- Matériaux PBR, textures WebP : visage 4096 px et reste de la peau 2048 px (couleur, normal
+  map, occlusion/roughness), yeux, atlas de mèches, t-shirt. La diffusion sous-cutanée est ajoutée par l'application
   (`src/avatar/materials.ts`).
 - Le personnage regarde vers +Z, à l'échelle 1 unité = 1 m (yeux à environ 1,62 m).
 

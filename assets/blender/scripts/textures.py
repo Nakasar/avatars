@@ -37,34 +37,6 @@ def _temp_material(kind):
     return m
 
 
-def _with_image(obj, img, material=None):
-    """Associe une image active (cible de cuisson) à tous les matériaux de l'objet."""
-    mats = [s.material for s in obj.material_slots]
-    if material is not None:
-        saved = mats
-        for s in obj.material_slots:
-            s.material = material
-        mats = [material]
-    else:
-        saved = None
-    for m in set(mats):
-        nt = m.node_tree
-        node = nt.nodes.get("__bake_target") or nt.nodes.new("ShaderNodeTexImage")
-        node.name = "__bake_target"
-        node.image = img
-        nt.nodes.active = node
-    return saved
-
-
-def _cleanup(obj, saved):
-    for s in obj.material_slots:
-        if s.material and s.material.node_tree.nodes.get("__bake_target"):
-            s.material.node_tree.nodes.remove(s.material.node_tree.nodes["__bake_target"])
-    if saved is not None:
-        for s, m in zip(obj.material_slots, saved):
-            s.material = m
-
-
 def select_only(*objs, active=None):
     for o in bpy.context.view_layer.objects:
         if o is not None:
@@ -76,63 +48,76 @@ def select_only(*objs, active=None):
     bpy.context.view_layer.objects.active = active or objs[0]
 
 
-def bake_attribute(obj, size, kind):
-    """Cuit la position (POS) ou la normale (NRM) monde de chaque texel. Retourne
-    (valeurs H×W×3, masque des texels couverts)."""
-    img = bpy.data.images.new(f"__{kind}", size, size, float_buffer=True, alpha=True)
-    img.pixels.foreach_set(np.full(size * size * 4, -10.0, np.float32))
-    mat = _temp_material(kind)
-    saved = _with_image(obj, img, mat)
-    scene = bpy.context.scene
-    scene.cycles.samples = 1
-    scene.render.bake.margin = 0
-    scene.render.bake.use_clear = False
-    scene.render.bake.use_selected_to_active = False
-    select_only(obj)
-    bpy.ops.object.bake(type="EMIT", margin=0, use_clear=False)
-    a = np.array(img.pixels[:], np.float32).reshape(size, size, 4)
-    _cleanup(obj, saved)
-    bpy.data.images.remove(img)
-    bpy.data.materials.remove(mat)
-    mask = a[..., 0] > -9.0
-    return a[..., :3].astype(np.float64), mask
-
-
-def bake_ao(obj, size, samples=128):
-    img = bpy.data.images.new("__AO", size, size, float_buffer=True)
-    saved = _with_image(obj, img)
+def bake_slots(obj, sizes, bake_type, emit=None, samples=1, margin=0, clear=None,
+               high=None, extrusion=0.0, distance=0.0, hide=()):
+    """Cuit une image par emplacement de matériau (tailles `sizes`, dans l'ordre des
+    emplacements). emit : None (matériaux d'origine), "POS", "NRM" ou nom d'attribut.
+    Retourne la liste des tableaux H×W×4."""
+    slots = list(obj.material_slots)
+    saved = [s.material for s in slots]
+    imgs, temps = [], []
+    for slot, size in zip(slots, sizes):
+        img = bpy.data.images.new(f"__bake_{len(imgs)}", size, size, float_buffer=True, alpha=True)
+        img.colorspace_settings.name = "Non-Color"
+        if clear is not None:
+            img.pixels.foreach_set(np.full(size * size * 4, clear, np.float32))
+        if emit:
+            m = _temp_material(emit)
+            slot.material = m
+            temps.append(m)
+        nt = slot.material.node_tree
+        node = nt.nodes.new("ShaderNodeTexImage")
+        node.name = "__bake_target"
+        node.image = img
+        nt.nodes.active = node
+        imgs.append(img)
+    hidden = [(o, o.hide_render) for o in hide]
+    for o, _ in hidden:
+        o.hide_render = True
     scene = bpy.context.scene
     scene.cycles.samples = samples
-    scene.render.bake.margin = 8
-    scene.render.bake.use_selected_to_active = False
-    select_only(obj)
-    bpy.ops.object.bake(type="AO", margin=8)
-    a = np.array(img.pixels[:], np.float32).reshape(size, size, 4)[..., 0]
-    _cleanup(obj, saved)
-    bpy.data.images.remove(img)
-    return a.astype(np.float64)
-
-
-def bake_normals_from(high, low, size, extrusion=0.0015, distance=0.004):
-    img = bpy.data.images.new("__NRM_hi", size, size, float_buffer=True)
-    img.colorspace_settings.name = "Non-Color"
-    saved = _with_image(low, img)
-    scene = bpy.context.scene
-    scene.cycles.samples = 1
     bk = scene.render.bake
-    bk.use_selected_to_active = True
-    bk.cage_extrusion = extrusion
-    bk.max_ray_distance = distance
-    bk.margin = 0
+    bk.margin = margin
+    bk.use_clear = clear is None
+    bk.use_selected_to_active = high is not None
     bk.normal_space = "TANGENT"
-    select_only(high, low, active=low)
-    bpy.ops.object.bake(type="NORMAL", margin=0, use_selected_to_active=True,
-                        cage_extrusion=extrusion, max_ray_distance=distance)
-    a = np.array(img.pixels[:], np.float32).reshape(size, size, 4)[..., :3]
-    _cleanup(low, saved)
-    bpy.data.images.remove(img)
+    if high is not None:
+        select_only(high, obj, active=obj)
+        bpy.ops.object.bake(type=bake_type, margin=margin, use_clear=False, use_selected_to_active=True,
+                            cage_extrusion=extrusion, max_ray_distance=distance)
+    else:
+        select_only(obj)
+        bpy.ops.object.bake(type=bake_type, margin=margin, use_clear=clear is None)
+    out = [np.array(i.pixels[:], np.float32).reshape(i.size[1], i.size[0], 4).astype(np.float64) for i in imgs]
+    for slot, m in zip(slots, saved):
+        nt = slot.material.node_tree
+        if nt.nodes.get("__bake_target"):
+            nt.nodes.remove(nt.nodes["__bake_target"])
+        slot.material = m
+    for m in temps:
+        bpy.data.materials.remove(m)
+    for i in imgs:
+        bpy.data.images.remove(i)
+    for o, h in hidden:
+        o.hide_render = h
     bk.use_selected_to_active = False
-    return a.astype(np.float64) * 2 - 1
+    return out
+
+
+def bake_attribute(obj, sizes, kind):
+    """Position (POS), normale (NRM) ou attribut de sommet, par emplacement de matériau.
+    Retourne une liste de (valeurs H×W×3, masque des texels couverts)."""
+    res = bake_slots(obj, sizes, "EMIT", emit=kind, clear=-10.0)
+    return [(a[..., :3], a[..., 0] > -9.0) for a in res]
+
+
+def bake_ao(obj, sizes, samples=128, hide=()):
+    return [a[..., 0] for a in bake_slots(obj, sizes, "AO", samples=samples, margin=8, hide=hide)]
+
+
+def bake_normals_from(high, low, sizes, extrusion=0.0015, distance=0.004):
+    res = bake_slots(low, sizes, "NORMAL", high=high, extrusion=extrusion, distance=distance)
+    return [a[..., :3] * 2 - 1 for a in res]
 
 
 # --- Outils image -----------------------------------------------------------------------
@@ -160,7 +145,7 @@ def dilate(img, mask, iters=24):
     return img
 
 
-def save_image(name, arr, path, srgb=True, alpha=None):
+def save_image(name, arr, path, srgb=True, alpha=None, fmt="PNG"):
     """Enregistre un tableau H×W×3 (linéaire si srgb=True : converti) en PNG."""
     h, w = arr.shape[:2]
     rgba = np.ones((h, w, 4), np.float32)
@@ -176,8 +161,10 @@ def save_image(name, arr, path, srgb=True, alpha=None):
     img.colorspace_settings.name = "sRGB" if srgb else "Non-Color"
     img.pixels.foreach_set(rgba.ravel())
     img.filepath_raw = path
-    img.file_format = "PNG"
-    img.save()
+    img.file_format = fmt
+    if fmt == "WEBP":
+        bpy.context.scene.render.image_settings.quality = 95
+    img.save(quality=95) if fmt == "WEBP" else img.save()
     return img
 
 
@@ -245,9 +232,11 @@ STUBBLE = np.array([0.20, 0.17, 0.165])
 SCALP = hair.HAIR_COLOR * 1.15
 
 
-def skin_maps(Pw, Nw, mask, ao, size, interior):
-    """Peint couleur, roughness et hauteur de pores pour la peau.
-    Pw / Nw : positions et normales monde (Blender) des texels."""
+def skin_maps(Pw, Nw, mask, ao, size, interior, micro):
+    """Peint couleur et roughness de la peau pour une image (atlas du visage ou du reste).
+    Pw / Nw : positions et normales monde (Blender) des texels ; micro : micro-relief
+    (pores + sillons) en espace texture, qui assombrit et dépolit légèrement la peau.
+    Retourne (couleur, roughness, poids des pores, masque des lèvres)."""
     P = topo.from_blender(Pw, BASE)
     N = np.stack([Nw[..., 0], -Nw[..., 1], Nw[..., 2]], -1)
     valid = mask
@@ -257,29 +246,59 @@ def skin_maps(Pw, Nw, mask, ao, size, interior):
 
     lowf = noise.fbm3(p, 28.0, 3, seed=1)
     midf = noise.fbm3(p, 140.0, 3, seed=2)
-    col = SKIN[None] * (1 + 0.07 * lowf[:, None] + 0.035 * midf[:, None])
-    # légère dominante jaune sur le front, plus rosée sur le bas du visage
-    col *= 1 + 0.03 * np.clip((p[:, 2] - 0.04) / 0.05, 0, 1)[:, None] * np.array([0.3, 0.2, -0.6])
+    col = SKIN[None] * (1 + 0.06 * lowf[:, None] + 0.035 * midf[:, None])
 
-    red = (0.55 * gauss(sp, (0.046, 0.074, -0.004), (0.016, 0.02, 0.016))
-           + 0.70 * gauss(sp, (0.0, 0.112, -0.013), (0.011, 0.012, 0.010))
-           + 0.55 * gauss(sp, (0.014, 0.098, -0.018), (0.008, 0.010, 0.008))
-           + 0.55 * gauss(sp, (0.078, -0.010, 0.006), (0.020, 0.030, 0.035))
-           + 0.30 * gauss(sp, (0.0, 0.095, -0.084), (0.014, 0.02, 0.012))
-           + 0.25 * gauss(sp, (0.032, 0.080, 0.028), (0.016, 0.02, 0.006))
-           + 0.15 * gauss(sp, (0.0, 0.095, 0.060), (0.03, 0.04, 0.02)))
-    red *= 1 + 0.4 * noise.fbm3(p, 90.0, 3, seed=3)
+    # zones de couleur du visage : front jaune, milieu rouge, bas bleuté (barbe, sang veineux)
+    yellow = gauss(sp, (0.0, 0.095, 0.062), (0.040, 0.05, 0.024))
+    blue = beard_mask(p) * 0.8 + 0.6 * gauss(sp, (0.030, 0.080, 0.006), (0.013, 0.02, 0.005))
+    col *= 1 + yellow[:, None] * np.array([0.03, 0.035, -0.07])
+    col *= 1 + np.clip(blue, 0, 1)[:, None] * np.array([-0.06, -0.03, 0.035])
+
+    red = (0.60 * gauss(sp, (0.046, 0.074, -0.004), (0.016, 0.02, 0.016))
+           + 0.75 * gauss(sp, (0.0, 0.110, -0.013), (0.010, 0.012, 0.010))
+           + 0.65 * gauss(sp, (0.014, 0.098, -0.018), (0.008, 0.010, 0.008))
+           + 0.60 * gauss(sp, (0.078, -0.010, 0.006), (0.020, 0.030, 0.035))
+           + 0.30 * gauss(sp, (0.0, 0.095, -0.078), (0.014, 0.02, 0.012))
+           + 0.30 * gauss(sp, (0.032, 0.080, 0.028), (0.016, 0.02, 0.006))
+           + 0.20 * gauss(sp, (0.0, 0.095, 0.062), (0.03, 0.04, 0.02)))
+    red *= 1 + 0.45 * noise.fbm3(p, 90.0, 3, seed=3)
+    # capillaires autour des ailes du nez et sur les joues
+    capi = np.clip(noise.fbm3(p, 700.0, 2, seed=12) * 2.5 - 1.0, 0, 1)
+    red += 0.5 * capi * (gauss(sp, (0.018, 0.094, -0.016), (0.010, 0.02, 0.010))
+                         + 0.5 * gauss(sp, (0.042, 0.075, -0.006), (0.014, 0.02, 0.012)))
     col = col * (1 - 0.40 * red[:, None]) + RED[None] * 0.40 * red[:, None]
+
+    # veines discrètes (tempes, paupières, front)
+    vr = 1 - np.abs(noise.fbm3(p * np.array([1.0, 1.0, 1.6]), 160.0, 3, seed=13))
+    vmask = (gauss(sp, (0.066, 0.040, 0.040), (0.010, 0.03, 0.020))
+             + 0.7 * gauss(sp, (0.032, 0.083, 0.027), (0.012, 0.02, 0.005))
+             + 0.4 * gauss(sp, (0.020, 0.096, 0.060), (0.012, 0.03, 0.015)))
+    vein = sdf.smoothstep(0.90, 0.975, vr) * np.clip(vmask, 0, 1)
+    col = col * (1 - 0.16 * vein[:, None]) + np.array([0.36, 0.26, 0.40])[None] * 0.16 * vein[:, None]
 
     # cernes discrètes
     dark = gauss(sp, (0.031, 0.079, 0.008), (0.012, 0.02, 0.0045))
-    col *= (1 - 0.16 * dark)[:, None] * np.array([1.0, 0.97, 1.02])
+    col *= (1 - 0.14 * dark)[:, None] * np.array([1.0, 0.97, 1.02])
+
+    # taches de rousseur légères et grains de beauté
+    frk = np.clip(noise.fbm3(p, 1500.0, 2, seed=14) * 3.0 - 1.6, 0, 1)
+    frk *= gauss(sp, (0.025, 0.095, -0.004), (0.025, 0.03, 0.020))
+    col *= (1 - 0.18 * frk)[:, None] * np.array([1.0, 0.96, 0.92])
+    rng = np.random.default_rng(31)
+    moles = np.array([[0.041, 0.072, -0.020], [-0.035, 0.083, -0.043], [0.060, 0.040, -0.060],
+                      [-0.052, 0.060, 0.030], [0.012, 0.093, 0.071], [-0.046, -0.010, -0.110],
+                      [0.050, 0.030, -0.120], [-0.020, 0.090, -0.072]])
+    for m in moles:
+        r = rng.uniform(0.0005, 0.0012)
+        dm = np.linalg.norm(p - m, axis=1)
+        mm = 1 - sdf.smoothstep(r * 0.5, r, dm)
+        col = col * (1 - 0.65 * mm[:, None]) + np.array([0.20, 0.10, 0.06])[None] * 0.65 * mm[:, None]
 
     # barbe de quelques jours
     beard = beard_mask(p)
     folli = noise.fbm3(p, 2200.0, 2, seed=4)
-    stub = beard * np.clip(0.55 + 0.9 * folli, 0, 1)
-    col = col * (1 - 0.55 * stub[:, None]) + STUBBLE[None] * 0.55 * stub[:, None]
+    stub = beard * np.clip(0.50 + 0.9 * folli, 0, 1)
+    col = col * (1 - 0.50 * stub[:, None]) + STUBBLE[None] * 0.50 * stub[:, None]
 
     # cuir chevelu (cheveux ras sous les mèches) et sourcils
     hm = sdf.smoothstep(-0.003, 0.006, hair.hair_mask(p))
@@ -287,18 +306,21 @@ def skin_maps(Pw, Nw, mask, ao, size, interior):
     scalp = hm * (0.55 + 0.45 * hdots) * sdf.smoothstep(0.0, 0.004, hair.hair_mask(p) + 0.002)
     col = col * (1 - 0.92 * scalp[:, None]) + SCALP[None] * 0.92 * scalp[:, None]
     brow = hair.brow_mask(p) * np.clip(0.5 + noise.fbm3(p, 1800.0, 2, seed=6), 0, 1)
-    col = col * (1 - 0.70 * brow[:, None]) + SCALP[None] * 0.5 * 0.70 * brow[:, None]
+    col = col * (1 - 0.68 * brow[:, None]) + SCALP[None] * 0.45 * 0.68 * brow[:, None]
 
-    # lèvres
+    # lèvres : vermillon plus sombre aux commissures, liseré clair au bord
     lips = lip_masks(p)
-    lipc = LIP[None] * (1 + 0.08 * midf[:, None])
+    lipc = LIP[None] * (1 + 0.10 * midf[:, None])
+    corner = sdf.smoothstep(0.012, 0.024, np.abs(p[:, 0]))
+    lipc *= (1 - 0.18 * corner)[:, None]
     col = col * (1 - lips[:, None]) + lipc * lips[:, None]
+    edge = lips * (1 - lips) * 4
+    col *= (1 + 0.06 * edge)[:, None]
 
     # intérieurs : conjonctive, bouche, narines, conduit auditif
     inner = interior[valid]
     eyei = eye_interior(p) * np.clip(inner * 1.5, 0, 1)
     col = col * (1 - eyei[:, None]) + np.array([0.62, 0.30, 0.27])[None] * eyei[:, None]
-    fval = hs.field(p)
     near_mouth = (np.abs(p[:, 0]) < 0.05) & (np.abs(p[:, 2] - hs.MOUTH_Z) < 0.04) & (p[:, 1] > 0.0)
     depth = np.clip((0.096 - 22 * p[:, 0] ** 2 - p[:, 1]) / 0.02, 0, 1)
     mouth_in = near_mouth & (inner > 0.5) & (eyei < 0.5)
@@ -309,35 +331,40 @@ def skin_maps(Pw, Nw, mask, ao, size, interior):
     canal = (inner > 0.5) * (np.abs(p[:, 0]) > 0.05)
     col *= (1 - 0.8 * canal)[:, None]
 
-    # occlusion ambiante cuite (légère, le reste passe par la carte d'occlusion glTF)
     a = ao[valid]
-    col *= (0.55 + 0.45 * a ** 0.6)[:, None]
+    col *= (0.60 + 0.40 * a ** 0.6)[:, None]
 
-    # roughness
-    rough = 0.57 + 0.05 * lowf
-    tz = (gauss(sp, (0.0, 0.10, 0.065), (0.022, 0.05, 0.02)) * 0.10
-          + gauss(sp, (0.0, 0.11, -0.005), (0.012, 0.03, 0.022)) * 0.14
-          + gauss(sp, (0.0, 0.095, -0.085), (0.014, 0.02, 0.012)) * 0.06)
+    # roughness : zone T brillante, joues mates, lèvres humides, cuir chevelu mat
+    rough = 0.58 + 0.05 * lowf
+    tz = (gauss(sp, (0.0, 0.10, 0.065), (0.022, 0.05, 0.022)) * 0.17
+          + gauss(sp, (0.0, 0.11, -0.005), (0.011, 0.03, 0.024)) * 0.22
+          + gauss(sp, (0.0, 0.095, -0.080), (0.014, 0.02, 0.012)) * 0.10)
     rough -= tz
-    rough = rough * (1 - lips) + 0.33 * lips
-    rough = rough * (1 - scalp) + 0.62 * scalp
-    rough = np.where(mouth_in, 0.22, rough)
-    rough = rough * (1 - eyei) + 0.16 * eyei
-    rough += 0.03 * noise.fbm3(p, 600.0, 2, seed=7)
+    rough += 0.04 * gauss(sp, (0.045, 0.072, -0.010), (0.016, 0.02, 0.016))
+    rough = rough * (1 - lips) + (0.30 + 0.06 * midf) * lips
+    rough = rough * (1 - scalp) + 0.68 * scalp
+    rough = np.where(mouth_in, 0.20, rough)
+    rough = rough * (1 - eyei) + 0.14 * eyei
+    rough += 0.04 * noise.fbm3(p, 600.0, 2, seed=7)
 
-    # assemblage dans l'image
-    albedo = np.zeros((size, size, 3))
+    albedo = np.zeros(mask.shape + (3,))
     albedo[valid] = np.clip(col, 0, 1)
-    R = np.zeros((size, size))
+    R = np.zeros(mask.shape)
     R[valid] = np.clip(rough, 0.12, 0.9)
-    pore_w = np.zeros((size, size))
-    pw = (0.6 + 0.6 * gauss(sp, (0.0, 0.11, -0.005), (0.02, 0.05, 0.02))
-          + 0.4 * gauss(sp, (0.04, 0.075, -0.01), (0.02, 0.03, 0.02))) * (1 - lips) * (1 - scalp * 0.7)
+    pw = (0.55 + 0.7 * gauss(sp, (0.0, 0.11, -0.005), (0.02, 0.05, 0.02))
+          + 0.5 * gauss(sp, (0.042, 0.075, -0.010), (0.02, 0.03, 0.02))
+          + 0.3 * gauss(sp, (0.0, 0.098, 0.060), (0.03, 0.04, 0.02))) * (1 - lips) * (1 - scalp * 0.7)
     pw = np.where(mouth_in | (eyei > 0.5), 0.0, pw)
+    pore_w = np.zeros(mask.shape)
     pore_w[valid] = pw
-    lipm = np.zeros((size, size))
+    lipm = np.zeros(mask.shape)
     lipm[valid] = lips
-    return albedo, R, pore_w, lipm, P
+    # le micro-relief creuse (assombrit) et dépolit un peu la peau
+    m = np.clip(-micro, 0, None)
+    m /= max(m.max(), 1e-6)
+    albedo *= (1 - 0.10 * m * pore_w)[..., None]
+    R = np.clip(R + 0.10 * m * pore_w, 0.12, 0.9)
+    return albedo, R, pore_w, lipm
 
 
 def wrinkle_displacement(p):
@@ -366,8 +393,15 @@ def wrinkle_displacement(p):
     q = sp - c
     r = np.linalg.norm(q, axis=1)
     ang = np.arctan2(q[:, 2], np.hypot(q[:, 0] * 0.7, q[:, 1]))
-    crease = np.exp(-((ang - 0.86) / 0.07) ** 2) * (r < 0.0175) * sdf.smoothstep(0.072, 0.078, f)
-    d -= 0.00035 * crease
+    crease = np.exp(-((ang - 0.86) / 0.06) ** 2) * (r < 0.0180) * sdf.smoothstep(0.072, 0.078, f)
+    d -= 0.00055 * crease
+    # bourrelet de peau au-dessus du pli (repli palpébral)
+    d += 0.00025 * np.exp(-((ang - 0.99) / 0.08) ** 2) * (r < 0.0185) * sdf.smoothstep(0.072, 0.078, f)
+    # sillon alaire : arc autour de l'aile du nez
+    ax, az = x - 0.0128, z + 0.0175
+    rr = np.hypot(ax, az * 1.15)
+    arc = (np.arctan2(az, ax) > -0.9) * sdf.smoothstep(0.088, 0.093, f)
+    d -= 0.00040 * np.exp(-((rr - 0.0086) / 0.0010) ** 2) * arc
     # vallée des larmes sous l'œil
     tt = np.exp(-(((z - 0.0085) + 0.25 * (x - 0.022)) / 0.0018) ** 2) * np.exp(-((x - 0.028) / 0.011) ** 2)
     d -= 0.00018 * tt * sdf.smoothstep(0.075, 0.082, f)
@@ -378,8 +412,10 @@ def wrinkle_displacement(p):
     # stries verticales des lèvres
     lm = lip_masks(p)
     d += 0.000035 * np.sin(p[:, 0] / 0.0011 * np.pi + 3 * noise.value3(p, 400.0)) * lm
+    # liseré du vermillon (« white roll ») : petit bourrelet au bord des lèvres
+    d += 0.00014 * lm * (1 - lm) * 4
     # pli mento-labial
-    d -= 0.00020 * np.exp(-((z + 0.0665) / 0.0025) ** 2) * np.exp(-(x / 0.016) ** 2) * sdf.smoothstep(0.085, 0.092, f)
+    d -= 0.00022 * np.exp(-((z + 0.0635) / 0.0025) ** 2) * np.exp(-(x / 0.016) ** 2) * sdf.smoothstep(0.085, 0.092, f)
     # léger grain moyen (relief de la peau)
     d += 0.00003 * noise.fbm3(p, 900.0, 3, seed=11)
     return d
@@ -397,12 +433,23 @@ def combine_normals(base, detail):
     return n / np.linalg.norm(n, axis=-1, keepdims=True)
 
 
-def pore_normal(size, weight, lipm):
-    H = 0.6 * noise.pores2((size, size), 0.020, 0.7, seed=21) + 0.35 * noise.fbm2((size, size), 3.0, 2, seed=22)
-    H *= weight
-    # stries des lèvres en espace texture (fines)
-    H += 0.25 * lipm * noise.fbm2((size, size), 1.5, 1, seed=23)
-    return height_to_normal(H, 0.9)
+def micro_relief(size, texel_mm):
+    """Micro-relief de la peau en espace texture : pores (creux ~0,1 mm), sillons
+    polygonaux (Voronoï ~0,65 mm) et grain fin. texel_mm : taille d'un texel en mm."""
+    px = lambda mm: max(mm / texel_mm, 0.6)
+    pores = noise.pores2((size, size), 0.9 * texel_mm ** 2, px(0.10), seed=21)
+    vor = noise.voronoi_edges((size, size), max(int(px(0.65)), 3), seed=24)
+    grooves = -np.exp(-(vor / px(0.06)) ** 2)
+    grain = noise.fbm2((size, size), px(0.25), 2, seed=22)
+    return 0.55 * pores + 0.45 * grooves + 0.18 * grain
+
+
+def pore_normal(micro, weight, lipm, texel_mm, strength=1.0):
+    H = micro * weight
+    size = micro.shape[0]
+    # stries verticales des lèvres
+    H += 0.35 * lipm * noise.fbm2((size, size), max(0.4 / texel_mm, 1.0), 1, seed=23)
+    return height_to_normal(H, 0.8 * strength * min(1.0, 0.12 / texel_mm))
 
 
 # --- Yeux ------------------------------------------------------------------------------

@@ -154,7 +154,17 @@ class FaceRig:
             brow = gauss(sp, (0.032, 0.088, 0.040), (0.02, 0.03, 0.012)) * self.side[s]
             return self.lids(s, up_amt=0.13 * amount) + vec(brow, (0, 0, 0.0012))
         if name == "jawOpen":
-            return self.jaw(JAW_OPEN_DEG * amount)
+            d = self.jaw(JAW_OPEN_DEG * amount)
+            # tissus mous : commissures qui rentrent et descendent, lèvre supérieure qui se
+            # soulève un peu, joues qui se creusent légèrement
+            cw = np.maximum(gauss(P, self.corner[1], (0.010, 0.014, 0.010)),
+                            gauss(P, self.corner[-1], (0.010, 0.014, 0.010)))
+            d[:, 0] += -0.10 * P[:, 0] * cw * amount
+            d[:, 2] += -0.0022 * cw * amount
+            d += vec(ul ** 1.5 * np.exp(-(P[:, 0] / 0.018) ** 2), (0, 0.0003, 0.0012))
+            hollow = gauss(sp, (0.046, 0.060, -0.040), (0.014, 0.02, 0.016))
+            d[:, 0] += -np.sign(P[:, 0]) * hollow * 0.0016 * amount
+            return d
         if name == "jawForward":
             return vec(J, (0, 0.0045, 0))
         if name == "jawLeft":
@@ -181,8 +191,16 @@ class FaceRig:
             cheek = gauss(sp, (0.040, 0.078, -0.012), (0.014, 0.02, 0.014)) * self.side[s]
             tag = "L" if s > 0 else "R"
             wide = gauss(P, self.corner[s], (0.018, 0.020, 0.016))
-            return (vec(cs[s], (s * 0.0045, -0.0040, 0.0060)) + vec(wide, (s * 0.0020, -0.0010, 0.0030))
-                    + vec(cheek, (0, 0.0020, 0.0040)) + vec(r[f"lid_lo_{tag}"], (0, 0, 0.0012)))
+            # traction du grand zygomatique : commissure vers la pommette (haut, dehors, arrière)
+            d = vec(cs[s], (s * 0.0045, -0.0040, 0.0060)) + vec(wide, (s * 0.0020, -0.0010, 0.0030))
+            # bourrelet de joue (en avant et en haut) qui creuse le sillon naso-génien
+            d += vec(cheek, (s * 0.0008, 0.0026, 0.0042)) + vec(r[f"lid_lo_{tag}"], (0, 0, 0.0012))
+            # lèvre supérieure relevée sur les côtés (dents du haut un peu découvertes)
+            up_lat = ul * self.side[s] * gauss(sp, (0.013, 0.1, 0), (0.010, 1, 1))
+            d += vec(up_lat, (0, 0.0002, 0.0012))
+            # lèvre inférieure étirée vers le bas sur le côté
+            d += vec(ll * self.side[s] * gauss(sp, (0.014, 0.1, 0), (0.010, 1, 1)), (s * 0.0006, 0, -0.0006))
+            return d
         if name.startswith("mouthFrown"):
             return vec(cs[s], (s * 0.0010, -0.0004, -0.0042))
         if name.startswith("mouthStretch"):
@@ -199,9 +217,12 @@ class FaceRig:
         if name == "mouthShrugUpper":
             return vec(ul, (0, 0.0005, 0.0018))
         if name.startswith("mouthPress"):
-            keep = 1 - np.maximum(cs[1], cs[-1]) * 0.5
-            return (vec(ul * self.side[s] * keep, (0, -0.0008, -0.0007))
-                    + vec(ll * self.side[s] * keep, (0, -0.0008, 0.0007)))
+            keep = (1 - np.maximum(cs[1], cs[-1]) * 0.5) * self.side[s]
+            # lèvres pressées : vermillon qui s'amincit (roule vers l'intérieur), peau qui bombe
+            d = vec(ul ** 2 * keep, (0, -0.0011, -0.0008)) + vec(ll ** 2 * keep, (0, -0.0011, 0.0008))
+            ring = (np.clip(ul - ul ** 3, 0, 1) + np.clip(ll - ll ** 3, 0, 1)) * keep
+            d += vec(ring, (0, 0.0005, 0))
+            return d
         if name.startswith("mouthLowerDown"):
             w = ll * self.side[s] * gauss(sp, (0.010, 0.1, 0), (0.014, 1, 1))
             return vec(w, (0, 0.0005, -0.0034))
@@ -220,9 +241,13 @@ class FaceRig:
             b = gauss(sp, (0.044, 0.081, 0.041), (0.013, 0.03, 0.013)) * self.side[s]
             return vec(b, (0, 0, 0.0045))
         if name == "cheekPuff":
-            c = gauss(sp, (0.044, 0.064, -0.036), (0.015, 0.02, 0.015))
-            d = vec(c, (0, 0.0020, 0))
-            d[:, 0] += np.sign(P[:, 0]) * c * 0.0045 * amount
+            # joues gonflées (région buccinatrice) le long de la normale, lèvres un peu en avant
+            c = gauss(sp, (0.042, 0.066, -0.038), (0.017, 0.022, 0.017))
+            nrm = np.stack([np.sign(P[:, 0]) * 0.85, np.full(len(P), 0.45), np.full(len(P), -0.15)], 1)
+            nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+            d = nrm * (c * 0.0055 * amount)[:, None]
+            d += vec(lips, (0, 0.0009, 0))
+            d[:, 0] += -0.08 * P[:, 0] * lips * amount
             return d
         if name.startswith("cheekSquint"):
             cheek = gauss(sp, (0.042, 0.075, -0.004), (0.014, 0.02, 0.012)) * self.side[s]

@@ -27,11 +27,12 @@ LOFT = np.array([
     [-0.016, 0.0950, 0.0672, 0.000, -0.062, 2.3, 2.6],
     [-0.034, 0.0965, 0.0618, -0.002, -0.045, 2.1, 2.35],
     [-0.050, 0.0955, 0.0585, 0.000, -0.032, 2.05, 2.2],
-    [-0.064, 0.0925, 0.0510, 0.014, -0.004, 2.0, 2.05],
-    [-0.078, 0.0985, 0.0395, 0.036, 0.020, 2.1, 2.0],
-    [-0.090, 0.0960, 0.0275, 0.056, 0.045, 2.1, 2.0],
-    [-0.100, 0.0840, 0.0130, 0.068, 0.060, 2.0, 2.0],
-    [-0.105, 0.0740, 0.0030, 0.070, 0.066, 2.0, 2.0],
+    # tiers inférieur ramené à ~7 cm (subnasale → menton), menton plus carré
+    [-0.0615, 0.0925, 0.0530, 0.012, -0.004, 2.05, 2.05],
+    [-0.0730, 0.0985, 0.0420, 0.034, 0.020, 2.3, 2.0],
+    [-0.0830, 0.0965, 0.0310, 0.054, 0.045, 2.6, 2.0],
+    [-0.0905, 0.0870, 0.0190, 0.066, 0.060, 2.6, 2.0],
+    [-0.0950, 0.0760, 0.0050, 0.070, 0.066, 2.2, 2.0],
 ])
 
 
@@ -73,9 +74,12 @@ def nose(p, d):
     body = ellipsoid(p, (0, 0.0915, -0.004), (0.0125, 0.0105, 0.021))
     d = smin(d, body, 0.008)
     dorsum = cone_capsule(p, (0, 0.0915, 0.0235), (0, 0.1100, -0.0095), 0.0042, 0.0062)
-    tip = ellipsoid(p, (0, 0.1092, -0.0135), (0.0084, 0.0080, 0.0080))
-    colum = cone_capsule(p, (0, 0.1070, -0.0185), (0, 0.0985, -0.0235), 0.0036, 0.0032)
+    tip = ellipsoid(p, (0, 0.1080, -0.0135), (0.0078, 0.0078, 0.0078))
+    colum = cone_capsule(p, (0, 0.1065, -0.0192), (0, 0.0985, -0.0238), 0.0034, 0.0031)
     n = smin(dorsum, tip, 0.006)
+    # lobule de la pointe légèrement bilobé (cartilages alaires)
+    for s in (-1, 1):
+        n = smin(n, ellipsoid(p, (s * 0.0033, 0.1098, -0.0132), (0.0050, 0.0058, 0.0058)), 0.003)
     n = smin(n, colum, 0.003)
     for s in (-1, 1):
         ala = ellipsoid(p, (s * 0.0128, 0.0970, -0.0175), (0.0070, 0.0088, 0.0062))
@@ -93,13 +97,16 @@ def lips(p, d):
     arch = 26.0 * x * x
     q = p.copy()
     q[..., 1] = f + arch
-    up = ellipsoid(q, (0, 0.0952, MOUTH_Z + 0.0058), (0.0245, 0.0072, 0.0058))
-    lo = ellipsoid(q, (0, 0.0932, MOUTH_Z - 0.0068), (0.0225, 0.0076, 0.0068))
+    up = ellipsoid(q, (0, 0.0952, MOUTH_Z + 0.0054), (0.0245, 0.0072, 0.0054))
+    lo = ellipsoid(q, (0, 0.0935, MOUTH_Z - 0.0072), (0.0228, 0.0078, 0.0072))
     d = smin(d, up, 0.005)
     d = smin(d, lo, 0.0085)
     # philtrum : deux crêtes légères et une gouttière
     phil = ellipsoid(q, (0, 0.1012, MOUTH_Z + 0.0135), (0.0040, 0.0025, 0.0060))
     d = smax(d, -phil, 0.002)
+    # colonnes du philtre et tubercule de la lèvre supérieure
+    tub = ellipsoid(q, (0, 0.0995, MOUTH_Z + 0.0030), (0.0055, 0.0030, 0.0028))
+    d = smin(d, tub, 0.0025)
     return d
 
 
@@ -107,8 +114,8 @@ def eyes(p, d):
     for s in (-1, 1):
         c = EYE_C * np.array([s, 1, 1])
         # orbite : creux sous l'arcade, au-dessus et autour du globe
-        orbit = ellipsoid(p, c * np.array([1, 0, 0]) + np.array([s * 0.0008, 0.0870, 0.0285]), (0.0155, 0.0065, 0.0090))
-        d = smax(d, -orbit, 0.005)
+        orbit = ellipsoid(p, c * np.array([1, 0, 0]) + np.array([s * 0.0008, 0.0868, 0.0275]), (0.0150, 0.0048, 0.0085))
+        d = smax(d, -orbit, 0.006)
         # paupières : coque autour du globe
         lid = sphere(p, c, EYE_R + LID_T)
         d = smin(d, lid, 0.0040)
@@ -121,11 +128,11 @@ def features(p, d):
         brow = cone_capsule(p, (s * 0.010, 0.0940, 0.0360), (s * 0.048, 0.0770, 0.0400), 0.0060, 0.0045)
         d = smin(d, brow, 0.008)
         # pommettes (zygomatiques)
-        cheek = ellipsoid(p, (s * 0.047, 0.064, 0.004), (0.016, 0.013, 0.011))
-        d = smin(d, cheek, 0.014)
+        cheek = ellipsoid(p, (s * 0.050, 0.061, 0.008), (0.017, 0.013, 0.010))
+        d = smin(d, cheek, 0.012)
         # tempes légèrement creusées
         # bord inférieur de la mandibule (de l'angle au menton)
-        mand = cone_capsule(p, (s * 0.050, -0.002, -0.060), (s * 0.019, 0.082, -0.093), 0.0065, 0.0055)
+        mand = cone_capsule(p, (s * 0.052, -0.004, -0.057), (s * 0.021, 0.080, -0.0855), 0.0066, 0.0056)
         d = smin(d, mand, 0.009)
         # joue sous la pommette (léger creux) et bourrelet naso-génien
         hollow = ellipsoid(p, (s * 0.060, 0.058, -0.030), (0.007, 0.014, 0.011))
@@ -133,7 +140,7 @@ def features(p, d):
         malar = ellipsoid(p, (s * 0.034, 0.0810, -0.022), (0.010, 0.007, 0.011))
         d = smin(d, malar, 0.010)
     # menton : saillie de la symphyse
-    chin = ellipsoid(p, (0, 0.089, -0.085), (0.018, 0.011, 0.012))
+    chin = ellipsoid(p, (0, 0.089, -0.0785), (0.021, 0.011, 0.011))
     d = smin(d, chin, 0.008)
     return d
 

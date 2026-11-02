@@ -30,13 +30,21 @@ def compute(bm, loops, groups):
     upper0 = {v.index for v in loops["mouth_up"][1:-1]}
     lower0 = {v.index for v in loops["mouth_lo"][1:-1]}
     corners = {loops["mouth_up"][0].index, loops["mouth_up"][-1].index}
+    # côté (haut / bas / commissure) hérité le long des chaînes d'inset depuis l'anneau 0
+    label = {}
+    for v in rings[0]:
+        label[v] = "c" if v.index in corners else ("u" if v.index in upper0 else "l")
+    for k in range(1, len(rings)):
+        for v in rings[k]:
+            inner = [e.other_vert(v) for e in v.link_edges if e.other_vert(v) in rings[k - 1]]
+            label[v] = label.get(inner[0], "c") if inner else ("u" if z[v.index] > lip_line_z(x[v.index]) else "l")
     for k, ring in enumerate(rings):
         w = (1 - k / (R + 2.0)) ** 1.2
         for v in ring:
             i = v.index
-            if i in corners:
+            if label[v] == "c":
                 ul[i] = ll[i] = 0.5 * w
-            elif i in upper0 or (k > 0 and z[i] > lip_line_z(x[i])):
+            elif label[v] == "u":
                 ul[i] = w
             else:
                 ll[i] = w

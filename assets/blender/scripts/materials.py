@@ -11,9 +11,13 @@ BASE = bh.BASE
 
 
 # --- UV ---------------------------------------------------------------------------------
-def unwrap_body(body, face_scale=1.8):
+FACE_REGIONS = (1, 3)   # visage + intérieurs (paupières, bouche) → atlas du visage (4K)
+
+
+def unwrap_body(body):
     """Coutures : pourtour du visage, bords libres (paupières, lèvres), dos du crâne et du
-    cou, oreilles (îles séparées). L'île du visage reçoit plus de texels."""
+    cou, oreilles (îles séparées). Deux groupes empaquetés séparément : le visage (matériau
+    « Face », atlas 4K) et le reste (matériau « Skin », 2K). Index de matériau mis à jour."""
     me = body.data
     bm = bmesh.new()
     bm.from_mesh(me)
@@ -84,19 +88,29 @@ def unwrap_body(body, face_scale=1.8):
                         seen.add(g.index)
                         stack.append(g)
         r = np.bincount([freg[f.index] for f in isl]).argmax()
-        k = {1: face_scale, 4: face_scale * 0.8, 3: 0.35, 2: 0.75}[r]
+        k = {1: 1.0, 3: 0.30, 2: 1.0, 4: 1.6}[r]
         pts = np.array([l[uvl].uv[:] for f in isl for l in f.loops])
         c = pts.mean(0)
         for f in isl:
             for l in f.loops:
                 l[uvl].uv = tuple(c + (np.array(l[uvl].uv[:]) - c) * k)
+        for f in isl:
+            f.material_index = 1 if r in FACE_REGIONS else 0
     bm.to_mesh(me)
     bm.free()
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.select_all(action="SELECT")
-    bpy.ops.uv.pack_islands(rotate=True, scale=True, margin=0.006)
-    bpy.ops.object.mode_set(mode="OBJECT")
+    for slot in (0, 1):
+        # seules les faces de l'emplacement restent visibles pendant l'empaquetage
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.reveal()
+        bpy.ops.mesh.select_all(action="DESELECT")
+        body.active_material_index = slot
+        bpy.ops.object.material_slot_select()
+        bpy.ops.mesh.hide(unselected=True)
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.select_all(action="SELECT")
+        bpy.ops.uv.pack_islands(rotate=True, scale=True, margin=0.004 if slot else 0.006)
+        bpy.ops.mesh.reveal()
+        bpy.ops.object.mode_set(mode="OBJECT")
     return freg
 
 
@@ -204,7 +218,7 @@ def alpha_card_material(name, atlas, rough=0.55):
     nt.links.new(t.outputs["Alpha"], rnd.inputs[0])
     nt.links.new(rnd.outputs[0], b.inputs["Alpha"])
     b.inputs["Roughness"].default_value = rough
-    b.inputs["Specular IOR Level"].default_value = 0.35
+    b.inputs["Specular IOR Level"].default_value = 0.22
     m.surface_render_method = "DITHERED"
     m.use_backface_culling = False
     return m

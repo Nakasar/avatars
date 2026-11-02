@@ -489,19 +489,22 @@ def build():
     P = positions()
     for v, p in targets.items():
         P[v.index] = p
-    # yeux : l'arcade masque le sillon palpébral depuis C ; les anneaux sont interpolés en
-    # 3D le long des chaînes puis projetés de face
+    # yeux : l'arcade masque le sillon palpébral depuis C. Les anneaux sont replacés par
+    # relaxation harmonique sur la surface (bord libre et un anneau de grille extérieur fixes)
+    bm.verts.ensure_lookup_table()
     for key in ("eye1", "eye-1"):
         R = EYE_RINGS
-        for ch in chains[key]:
-            p0, pR = P[ch[0].index], P[ch[-1].index]
-            for k in range(1, R):
-                q = p0 + (pR - p0) * (k / R)
-                P[ch[k].index] = q
-        idx = np.array([ch[k].index for ch in chains[key] for k in range(1, R)])
-        q = P[idx]
-        q[:, 1] = frontal_surface(q[:, [0, 2]])
-        P[idx] = q
+        reg = ring_region(loops[key], R + 3)
+        outer = reg - ring_region(loops[key], R + 2)
+        fixed = set(loops[key]) | outer
+        free = [v for v in reg if v not in fixed]
+        fi = np.array([v.index for v in free])
+        nb = [np.array([e.other_vert(v).index for e in v.link_edges]) for v in free]
+        for it in range(160):
+            avg = np.array([P[n].mean(0) for n in nb])
+            P[fi] = P[fi] * 0.3 + avg * 0.7
+            if it % 4 == 3 or it == 159:
+                P[fi] = snap(P[fi], 2)
     # les anneaux internes des paupières et des lèvres restent ceux de la projection ;
     # le reste glisse sur la surface
     keep = set(targets)
