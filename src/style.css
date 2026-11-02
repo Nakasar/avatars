@@ -106,6 +106,12 @@ dialog input, dialog select { color: var(--text); width: 100%; }
 dialog small { font-size: 12px; opacity: 0.8; }
 dialog code { font-size: 12px; }
 .row { display: flex; gap: 8px; }
+.row[hidden] { display: none; }
+.account { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+.account .row { align-items: center; }
+.account-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account details { display: flex; flex-direction: column; gap: 6px; }
+.account summary { cursor: pointer; font-size: 12px; opacity: 0.8; margin-bottom: 6px; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
 .actions #demo { margin-right: auto; }
 

@@ -5,6 +5,7 @@ import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
+import { completeLogin, revokeLogin, startLogin } from './breign/oauth';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -84,10 +85,15 @@ function showError(msg: string) {
 // Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
 async function begin() {
   if (conversation.current !== 'off') return;
+  if (!settings.apiKey) {
+    // Pas encore connecté : la page part vers Breign, puis revient ici, connectée.
+    void login();
+    return;
+  }
   try {
     await conversation.start();
     $('start').classList.add('hidden');
-    if (!breign.configured) showError('Renseignez une clé API et un agent dans les réglages (⚙) pour discuter.');
+    if (!breign.configured) openSettings('Choisissez l’agent qui vous répondra.');
   } catch (e) {
     showError(`Micro indisponible : ${e instanceof Error ? e.message : e}`);
   }
@@ -136,19 +142,66 @@ function readForm(): AppSettings {
   };
 }
 
+function openSettings(message?: string) {
+  fillForm();
+  renderAccount();
+  conversation.vad.paused = true;
+  if (!dialog.open) dialog.showModal();
+  if (message) showError(message);
+}
+
 $('settings-btn').addEventListener('click', (e) => {
   e.stopPropagation();
-  fillForm();
-  conversation.vad.paused = true;
-  dialog.showModal();
+  openSettings();
+});
+
+// ---------------------------------------------------------------- Connexion Breign (OAuth2)
+function renderAccount() {
+  const signedIn = Boolean(settings.apiKey);
+  $('account-out').hidden = signedIn;
+  $('account-in').hidden = !signedIn;
+  $('account-name').textContent = settings.account
+    ? settings.account.email || settings.account.keyName
+    : 'Clé API personnelle';
+  // La clé manuelle reste possible, repliée par défaut.
+  $<HTMLDetailsElement>('api-key-box').open = signedIn && !settings.account;
+  $('start-title').textContent = signedIn ? 'Commencer la conversation' : 'Se connecter avec Breign';
+  $('start-sub').textContent = signedIn
+    ? 'Autorisez le micro, puis parlez naturellement. Vous pouvez couper la parole à l’avatar à tout moment.'
+    : 'Connectez-vous à votre compte Breign, puis parlez naturellement à l’avatar.';
+}
+
+async function login() {
+  // Les réglages en cours d'édition sont gardés pour le retour.
+  if (dialog.open) settings = { ...readForm(), apiKey: settings.apiKey };
+  saveSettings(settings);
+  try {
+    await startLogin(settings.basePath);
+  } catch (e) {
+    showError(await describeError(e));
+  }
+}
+
+$('login').addEventListener('click', () => void login());
+$('logout').addEventListener('click', async () => {
+  await revokeLogin(settings.basePath, settings.apiKey, settings.account);
+  settings = { ...settings, apiKey: '', account: undefined };
+  (form.elements.namedItem('apiKey') as HTMLInputElement).value = '';
+  saveSettings(settings);
+  renderAccount();
+  void applySettings();
 });
 
 dialog.addEventListener('close', () => {
   conversation.vad.paused = false;
   if (dialog.returnValue !== 'save') return;
   const prevModel = settings.modelUrl;
-  settings = readForm();
+  const next = readForm();
+  // Une clé changée à la main n'est plus celle du compte connecté.
+  if (next.apiKey !== settings.apiKey) next.account = undefined;
+  settings = next;
   saveSettings(settings);
+  renderAccount();
   void applySettings();
   if (settings.modelUrl !== prevModel) void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
 });
@@ -186,7 +239,10 @@ $('demo').addEventListener('click', () => {
 async function applySettings() {
   breign = new BreignService(settings);
   voice.lang = settings.lang;
-  if (!breign.configured) return;
+  if (!breign.configured) {
+    $('agent-name').textContent = '';
+    return;
+  }
   try {
     const agent = await breign.getAgent();
     $('agent-name').textContent = agent.name;
@@ -198,7 +254,33 @@ async function applySettings() {
 // ---------------------------------------------------------------- Démarrage
 document.body.dataset.state = 'off';
 void loadAvatar(settings.modelUrl || DEFAULT_MODEL);
-void applySettings();
+
+async function boot() {
+  try {
+    const signedIn = await completeLogin();
+    if (signedIn) {
+      const { apiKey, ...account } = signedIn;
+      settings = { ...loadSettings(), apiKey, account };
+      saveSettings(settings);
+    }
+  } catch (e) {
+    showError(await describeError(e));
+  }
+  renderAccount();
+  const q = new URLSearchParams(location.search);
+  if (q.get('login') === '1') {
+    // Reprise après la bascule localhost → 127.0.0.1.
+    q.delete('login');
+    history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}`);
+    if (!settings.apiKey) return void login();
+  }
+  await applySettings();
+  if (settings.apiKey && !settings.agentId) {
+    openSettings('Connecté à Breign. Choisissez maintenant l’agent qui vous répondra.');
+    $('load-agents').click();
+  }
+}
+void boot();
 
 // Accès console pour le débogage.
 Object.assign(window, { stage, voice, conversation, THREE });

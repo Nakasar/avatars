@@ -11,15 +11,39 @@ la parole à tout moment.
 
 ```bash
 npm install        # copie aussi le transcodeur Basis dans public/basis
-npm run dev        # http://localhost:5173
+npm run dev        # http://127.0.0.1:5173
 ```
 
-Ouvrez les réglages (⚙) et renseignez :
+Cliquez sur « Se connecter avec Breign » : Breign App vous demande d'autoriser l'avatar, puis
+vous ramène sur la page, connecté. Choisissez ensuite l'agent dans les réglages (⚙). Aucune clé
+à copier.
+
+### Connexion Breign (OAuth2)
+
+La connexion suit le même chemin que `breign login` (CLI) : OAuth2 code d'autorisation avec
+PKCE (S256) et retour sur une adresse loopback (RFC 8252), voir `src/breign/oauth.ts`.
+
+1. `GET /auth/authorize?response_type=code&client_id=…&redirect_uri=http://127.0.0.1:5173/callback&code_challenge=…&state=…&device_name=…`
+   redirige vers l'écran de consentement de Breign App ;
+2. Breign App renvoie sur `/callback?code=…&state=…` (le `state` est vérifié, le code est aussitôt
+   effacé de l'adresse) ;
+3. `POST /auth/token` échange le code et le vérificateur PKCE contre une clé API de l'utilisateur,
+   nommée « Breign Avatars (navigateur, système) » dans son profil.
+
+« Se déconnecter » révoque cette clé (`DELETE /users/{userId}/api-keys/{keyId}`) et l'oublie.
+Le client OAuth est `breign-cli` par défaut (celui de la CLI, déjà connu de la plateforme) ;
+pour un écran de consentement au nom de l'avatar, enregistrez un client public dans
+l'organisation (`POST /organizations/{id}/oauth-clients`, `type: public`,
+`applicationType: native`) et renseignez `VITE_BREIGN_OAUTH_CLIENT_ID`. Le serveur de dev
+écoute sur `127.0.0.1` ; ouverte sur `localhost`, la page y bascule d'elle-même avant la
+connexion. Une clé API collée à la main reste possible (« Utiliser une clé API à la place »).
+
+### Réglages
 
 | Réglage | Rôle |
 | --- | --- |
 | URL de l'API | `/breign-api` par défaut : proxy Vite vers `https://api.breign.eu` (évite le CORS en local). |
-| Clé API | Clé personnelle (profil Breign → clés API), envoyée en en-tête `X-API-Key`. Stockée dans le navigateur. |
+| Compte Breign | « Se connecter avec Breign » (OAuth2), ou une clé API collée à la main. La clé est envoyée en en-tête `X-API-Key` et stockée dans ce navigateur. |
 | Agent | Id de l'agent qui répond. Le bouton « Lister » interroge `GET /agents`. |
 | Application | Optionnel : application (avatar) Breign. Active sa voix (`POST /apps/{id}/text-to-speech`) et sa transcription. Sans elle, la voix du navigateur est utilisée. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
@@ -104,8 +128,11 @@ npx @gltf-transform/cli optimize in.glb out.glb --compress meshopt --texture-com
 
 ## Limites connues
 
-- La clé API est utilisée depuis le navigateur : à réserver au développement. En production,
-  passer par un petit backend ou par les jetons d'instance éphémère des applications Breign.
+- La clé obtenue à la connexion est une clé API complète de l'utilisateur, gardée dans le
+  navigateur. Pour un avatar public, passer plutôt par un petit backend ou par les jetons
+  d'instance éphémère des applications Breign.
+- Le retour de connexion doit être une adresse loopback (`127.0.0.1:<port>`) : l'avatar servi
+  depuis un vrai domaine demandera un client OAuth « web » côté Breign.
 - Le lipsync audio est une heuristique spectrale ; un lipsync fourni par Breign (visèmes
   horodatés), s'il est exposé, serait plus précis.
 - En production, l'API doit autoriser l'origine du site (CORS) ou être servie derrière un proxy.

@@ -31,8 +31,8 @@
     <div id="error" class="error" role="alert"></div>
 
     <button id="start" class="start" aria-label="Commencer la conversation">
-      <span class="start-title">Commencer la conversation</span>
-      <span class="start-sub">Autorisez le micro, puis parlez naturellement. Vous pouvez couper la parole à l’avatar à tout moment.</span>
+      <span class="start-title" id="start-title">Commencer la conversation</span>
+      <span class="start-sub" id="start-sub">Autorisez le micro, puis parlez naturellement. Vous pouvez couper la parole à l’avatar à tout moment.</span>
     </button>
 
     <form id="type-box" class="type-box">
@@ -46,10 +46,21 @@
           <input name="basePath" placeholder="/breign-api" />
           <small>En local, <code>/breign-api</code> passe par le proxy vers https://api.breign.eu.</small>
         </label>
-        <label>Clé API
-          <input name="apiKey" type="password" autocomplete="off" placeholder="x-api-key" />
-          <small>Profil Breign → clés API. Stockée uniquement dans ce navigateur.</small>
-        </label>
+        <div class="account">
+          <span class="account-label">Compte Breign</span>
+          <div id="account-out" class="row">
+            <button type="button" id="login" class="primary">Se connecter avec Breign</button>
+          </div>
+          <div id="account-in" class="row" hidden>
+            <span id="account-name" class="account-name"></span>
+            <button type="button" id="logout">Se déconnecter</button>
+          </div>
+          <details id="api-key-box">
+            <summary>Utiliser une clé API à la place</summary>
+            <input name="apiKey" type="password" autocomplete="off" placeholder="x-api-key" />
+            <small>Profil Breign → clés API. Stockée uniquement dans ce navigateur.</small>
+          </details>
+        </div>
         <label>Agent
           <div class="row"><input name="agentId" placeholder="id de l’agent" /><button type="button" id="load-agents">Lister</button></div>
           <select id="agent-list" hidden></select>
