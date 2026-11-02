@@ -6,6 +6,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { upgradeMaterials } from './materials';
 import { VISEMES, VISEME_TO_ARKIT, type Weights } from './visemes';
 import type { VisemeFrame } from './lipsync';
+import type { Character } from './Character';
 
 export type Expression = 'neutral' | 'happy' | 'thinking' | 'surprised' | 'sad' | 'listening';
 
@@ -56,7 +57,7 @@ let ktx2: KTX2Loader | undefined;
  * Ready Player Me, Character Creator 4, exports MetaHuman…) et/ou les visèmes Oculus
  * (`viseme_aa`, `viseme_PP`…).
  */
-export class Avatar {
+export class Avatar implements Character {
   readonly root = new THREE.Group();
   /** Point de mise au point pour la caméra (entre les yeux). */
   readonly focus = new THREE.Vector3();

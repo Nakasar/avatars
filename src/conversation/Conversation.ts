@@ -1,4 +1,5 @@
-import type { Avatar, Expression } from '../avatar/Avatar';
+import type { Expression } from '../avatar/Avatar';
+import type { Character } from '../avatar/Character';
 import { SentenceChunker, type Voice } from '../avatar/Voice';
 import { describeError, type BreignService } from '../breign/BreignService';
 import { toWav16k, VoiceActivity, type Utterance } from './VoiceActivity';
@@ -39,7 +40,7 @@ export class Conversation {
   constructor(
     private voice: Voice,
     private getBreign: () => BreignService,
-    private getAvatar: () => Avatar | undefined,
+    private getAvatar: () => Character | undefined,
     private events: ConversationEvents = {},
   ) {
     this.vad = new VoiceActivity(voice.ctx);

@@ -28,6 +28,8 @@ export class Stage {
 
   private composer: EffectComposer;
   private gtao?: GTAOPass;
+  private bloom?: UnrealBloomPass;
+  private backdrop: THREE.Texture;
   private finishPass: ShaderPass;
   private timer = new THREE.Timer();
   private updaters: Array<(dt: number, t: number) => void> = [];
@@ -61,7 +63,8 @@ export class Stage {
     this.controls.minAzimuthAngle = -Math.PI * 0.45;
     this.controls.maxAzimuthAngle = Math.PI * 0.45;
 
-    this.scene.background = makeBackdrop();
+    this.backdrop = makeBackdrop();
+    this.scene.background = this.backdrop;
 
     // --- Éclairage d'environnement (réflexions spéculaires et lumière ambiante réaliste)
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -121,8 +124,8 @@ export class Stage {
       this.composer.addPass(this.gtao);
     }
     if (quality !== 'low') {
-      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.05, 0.4, 0.98);
-      this.composer.addPass(bloom);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.05, 0.4, 0.98);
+      this.composer.addPass(this.bloom);
     }
     this.composer.addPass(new OutputPass());
     this.finishPass = new ShaderPass(FinishShader);
@@ -165,6 +168,26 @@ export class Stage {
     this.gtao?.updateGtaoMaterial({ radius: r * 0.12 });
   }
 
+  /**
+   * Ambiance du plateau : « studio » pour l'humain (lumière photo, halo discret),
+   * « holo » pour l'orbe (fond sombre teinté de sa couleur, halo lumineux généreux).
+   */
+  setLook(look: 'studio' | 'holo', tint?: THREE.ColorRepresentation) {
+    const holo = look === 'holo';
+    if (this.bloom) {
+      this.bloom.strength = holo ? 0.7 : 0.05;
+      this.bloom.radius = holo ? 0.5 : 0.4;
+      this.bloom.threshold = holo ? 0.2 : 0.98;
+    }
+    // Le rendu « neutre » garde la saturation des lumières vives, là où AgX les blanchit.
+    this.renderer.toneMapping = holo ? THREE.NeutralToneMapping : THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = holo ? 1 : 0.9;
+    if (this.gtao) this.gtao.enabled = !holo;
+    this.backdrop.dispose();
+    this.backdrop = holo ? makeHoloBackdrop(new THREE.Color(tint ?? 0x2f8cff)) : makeBackdrop();
+    this.scene.background = this.backdrop;
+  }
+
   onUpdate(fn: (dt: number, t: number) => void) {
     this.updaters.push(fn);
   }
@@ -200,6 +223,25 @@ function makeBackdrop(): THREE.Texture {
   grad.addColorStop(0, '#4a4642');
   grad.addColorStop(0.55, '#262422');
   grad.addColorStop(1, '#0e0d0c');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 512, 512);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Fond de l'orbe : presque noir, avec une lueur de sa couleur derrière elle. */
+function makeHoloBackdrop(tint: THREE.Color): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#05060a';
+  g.fillRect(0, 0, 512, 512);
+  const [r, gr, b] = tint.clone().convertLinearToSRGB().toArray().map((v) => Math.round(v * 255));
+  const grad = g.createRadialGradient(256, 220, 10, 256, 256, 360);
+  grad.addColorStop(0, `rgba(${r},${gr},${b},0.22)`);
+  grad.addColorStop(0.5, `rgba(${r},${gr},${b},0.06)`);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 512, 512);
   const tex = new THREE.CanvasTexture(c);

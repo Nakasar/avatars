@@ -47,12 +47,30 @@ connexion. Une clé API collée à la main reste possible (« Utiliser une clé 
 | Agent | Id de l'agent qui répond. Le bouton « Lister » interroge `GET /agents`. |
 | Application | Optionnel : application (avatar) Breign. Active sa voix (`POST /apps/{id}/text-to-speech`) et sa transcription. Sans elle, la voix du navigateur est utilisée. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
-| Modèle 3D | URL d'un GLB (voir plus bas). |
+| Apparence du bot | « Humain réaliste » (le modèle 3D) ou « Orbe IA (mascotte) ». L'aperçu change en direct. |
+| Couleur de l'orbe | Bleu, orange, vert ou violet. |
+| Modèle 3D | URL d'un GLB (voir plus bas), pour l'apparence humaine. |
 
 Les mêmes valeurs peuvent venir de `.env.local` (voir `.env.example`) ou de l'URL :
-`?agent=…&app=…&lang=fr&model=…&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
+`?agent=…&app=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
 
 Le bouton « Tester la voix » des réglages fait parler l'avatar sans connexion à Breign.
+
+### Orbe IA
+
+Une sphère holographique de données : nuée de particules, réseau de circuits qui scintille,
+anneaux de données en pointillés, éclats de verre en orbite, étincelles et bribes de binaire
+autour d'un cœur lumineux. Elle flotte, respire et réagit à la conversation :
+
+| État | Réaction |
+| --- | --- |
+| Repos | Respiration lente, rotation, et de temps en temps une reconfiguration (gyroscope, cube, nœud) avant de redevenir sphère. |
+| Écoute | Se resserre, respire plus vite et vibre au rythme de la voix de l'utilisateur. |
+| Réflexion | Anneaux et données s'allument, tourbillon, cœur qui scintille, changements de forme en boucle. |
+| Parole | Cœur, surface et étincelles pulsent avec l'énergie de la voix ; les éclats s'écartent. |
+
+Les expressions se traduisent aussi : joie (plus vive, rebond), surprise (sursaut), tristesse
+(plus terne, plus lente). Tout est procédural (`src/orb/Orb.ts`), sans fichier à charger.
 
 ## Conversation vocale
 
@@ -86,6 +104,8 @@ src/
   settings.ts              réglages (env → navigateur → URL)
   scene/Stage.ts           rendu : tone mapping AgX, IBL, éclairage 3 points, ombres douces,
                            MSAA, GTAO, bloom léger, finition photo (vignettage, grain)
+  avatar/Character.ts      interface commune aux apparences (humain, orbe)
+  orb/Orb.ts               orbe IA : particules et shaders, formes, réactions aux états
   avatar/Avatar.ts         chargement GLB (KTX2, meshopt, Draco), mise en pose, blendshapes,
                            clignements, saccades, respiration, mouvements de tête, expressions
   avatar/materials.ts      matériaux physiques : peau (diffusion sous-cutanée approchée, sheen),

@@ -112,6 +112,19 @@ dialog code { font-size: 12px; }
 .account-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account details { display: flex; flex-direction: column; gap: 6px; }
 .account summary { cursor: pointer; font-size: 12px; opacity: 0.8; margin-bottom: 6px; }
+/* Choix de l'apparence */
+#settings-form[data-look='orb'] .only-human,
+#settings-form:not([data-look='orb']) .only-orb { display: none; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; border: 0; padding: 0; margin: 0 0 14px; }
+.swatches legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+dialog label.swatch {
+  flex-direction: row; align-items: center; gap: 7px; margin: 0; padding: 6px 11px 6px 7px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; color: var(--text);
+}
+.swatch input { position: absolute; opacity: 0; pointer-events: none; width: auto; }
+.swatch span { width: 16px; height: 16px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
+.swatch:has(input:checked) { border-color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
+.swatch:has(input:focus-visible) { outline: 2px solid var(--c); outline-offset: 2px; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
 .actions #demo { margin-right: auto; }
 
