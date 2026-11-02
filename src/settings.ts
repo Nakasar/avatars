@@ -1,7 +1,10 @@
 import type { BreignSettings } from './breign/BreignService';
+import type { BreignAccount } from './breign/oauth';
 
 export interface AppSettings extends BreignSettings {
   modelUrl: string;
+  /** Compte obtenu par « Se connecter avec Breign » (absent pour une clé collée à la main). */
+  account?: BreignAccount;
 }
 
 const KEY = 'breign-avatar:settings';

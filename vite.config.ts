@@ -6,7 +6,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const target = env.BREIGN_API_TARGET || 'https://api.breign.eu';
   return {
+    // 127.0.0.1 plutôt que localhost : c'est l'adresse de retour de « Se connecter avec Breign »
+    // (loopback OAuth, RFC 8252), et Node peut sinon n'écouter que sur ::1.
     server: {
+      host: '127.0.0.1',
       proxy: {
         '/breign-api': {
           target,
@@ -17,6 +20,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     preview: {
+      host: '127.0.0.1',
       proxy: {
         '/breign-api': {
           target,

@@ -116,7 +116,7 @@ export class Conversation {
     const turn = ++this.turn;
     const breign = this.getBreign();
     if (!breign.configured) {
-      this.events.onError?.('Renseignez une clé API et un agent dans les réglages (⚙) pour discuter.');
+      this.events.onError?.('Connectez-vous avec Breign et choisissez un agent dans les réglages (⚙) pour discuter.');
       this.setState('idle');
       return;
     }
@@ -147,7 +147,7 @@ export class Conversation {
     const avatar = this.getAvatar();
     this.events.onUserText?.(text);
     if (!breign.configured) {
-      this.events.onError?.('Renseignez une clé API et un agent dans les réglages (⚙) pour discuter.');
+      this.events.onError?.('Connectez-vous avec Breign et choisissez un agent dans les réglages (⚙) pour discuter.');
       return;
     }
     this.setState('thinking');

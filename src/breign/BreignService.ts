@@ -140,12 +140,13 @@ export async function describeError(e: unknown): Promise<string> {
     let detail = '';
     try {
       const body = await e.response.clone().json();
-      detail = body?.message ?? body?.error ?? '';
+      detail = body?.message ?? body?.error_description ?? body?.error ?? '';
     } catch {
       /* corps non JSON */
     }
-    if (status === 401) return 'Clé API refusée (401). Vérifiez la clé dans les réglages.';
+    if (status === 401) return 'Session Breign expirée ou clé révoquée (401). Reconnectez-vous dans les réglages (⚙).';
     if (status === 403) return `Accès refusé (403)${detail ? ` : ${detail}` : ''}.`;
+    if (status === 400) return `Requête refusée par Breign${detail ? ` : ${detail}` : ''}.`;
     if (status === 404) return `Ressource introuvable (404)${detail ? ` : ${detail}` : ''}. Vérifiez l’agent ou l’application.`;
     return `Erreur ${status}${detail ? ` : ${detail}` : ''}`;
   }
