@@ -6,6 +6,7 @@ import {
   ResponseError,
   type AgentUio,
 } from '@breign/client';
+import { collectNativeActions, type NativeAction } from './nativeActions';
 
 export interface BreignSettings {
   /** URL de l'API. En dev, `/breign-api` passe par le proxy Vite vers https://api.breign.eu. */
@@ -68,12 +69,14 @@ export class BreignService {
 
   /**
    * Envoie un message à l'agent et suit la génération de la réponse.
-   * `onProgress` est appelé à chaque évolution du texte.
+   * `onProgress` est appelé à chaque évolution du texte ; `onActions` reçoit, une fois la
+   * réponse terminée, ses actions natives (montrer une image, ouvrir une page…).
    */
   async send(
     message: string,
     onProgress: (p: ReplyProgress) => void,
     signal?: AbortSignal,
+    onActions?: (actions: NativeAction[]) => void,
   ): Promise<string> {
     const { agentId, lang } = this.settings;
     const res = this.conversationId
@@ -88,6 +91,7 @@ export class BreignService {
     // Réponse synchrone (serveur sans mode asynchrone) : le texte est déjà là.
     if (res.text) {
       onProgress({ text: res.text, status: 'completed', done: true });
+      if (onActions) void this.fetchActions(res.conversationId, res.messageId, signal).then(onActions);
       return res.text;
     }
 
@@ -112,7 +116,26 @@ export class BreignService {
       if (st.status === 'moderated') {
         return text || 'Ce message a été bloqué par les règles de l’organisation.';
       }
-      if (done) return text;
+      if (done) {
+        if (onActions) void this.fetchActions(res.conversationId, res.messageId, signal).then(onActions);
+        return text;
+      }
+    }
+  }
+
+  /**
+   * Actions natives d'un message (le statut de génération ne les porte pas : il faut relire
+   * le message une fois terminé). Ne lève jamais : sans actions, renvoie une liste vide.
+   */
+  async fetchActions(conversationId: string, messageId: string, signal?: AbortSignal): Promise<NativeAction[]> {
+    try {
+      const msg = await this.prompts.getMessageById(conversationId, messageId, { signal });
+      const actions = collectNativeActions(msg);
+      if (actions.length) console.info('[breign] actions natives :', actions.map((a) => a.raw));
+      return actions;
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') console.warn('[breign] actions du message illisibles', e);
+      return [];
     }
   }
 

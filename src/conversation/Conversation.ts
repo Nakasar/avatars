@@ -2,6 +2,7 @@ import type { Expression } from '../avatar/Avatar';
 import type { Character } from '../avatar/Character';
 import { SentenceChunker, type Voice } from '../avatar/Voice';
 import { describeError, type BreignService } from '../breign/BreignService';
+import type { NativeAction } from '../breign/nativeActions';
 import { safeStreamingText, stripActions } from '../actions/parse';
 import { toWav16k, VoiceActivity, type Utterance } from './VoiceActivity';
 
@@ -14,6 +15,10 @@ export interface ConversationEvents {
   onAgentText?: (text: string, done: boolean) => void;
   onError?: (message: string) => void;
   onLevel?: (level: number) => void;
+  /** Actions natives de la réponse (montrer une image, ouvrir une page…), à sa fin. */
+  onNativeActions?: (actions: NativeAction[]) => void;
+  /** Une nouvelle réponse commence à être dite. */
+  onReplyStart?: () => void;
 }
 
 /**
@@ -165,6 +170,7 @@ export class Conversation {
           this.avatarStartedSpeaking = true;
           this.openUserText = ''; // le tour de l'utilisateur est clos : l'avatar répond
           avatar?.resetActions?.(); // les effets de la réponse précédente s'arrêtent
+          this.events.onReplyStart?.();
           avatar?.setMode('speaking');
           avatar?.setExpression(moodOf(stripActions(full)), 0.6);
         }
@@ -182,6 +188,9 @@ export class Conversation {
           speak(chunker.push(done ? partial : safeStreamingText(partial), done), partial);
         },
         abort.signal,
+        (actions) => {
+          if (turn === this.turn && actions.length) this.events.onNativeActions?.(actions);
+        },
       );
       if (turn !== this.turn) return;
       this.events.onAgentText?.(stripActions(final), true);

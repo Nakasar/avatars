@@ -91,6 +91,10 @@ hochement) et taille. La liste complète et les consignes à coller dans le prom
 sont dans [docs/codes-action.md](docs/codes-action.md) ; les réglages permettent de tester un
 code et de copier ces consignes.
 
+Les **actions natives** de Breign (par exemple montrer une image) sont aussi jouées : à la fin
+de chaque réponse, l'application relit le message et affiche l'image, la vidéo ou la page web
+qu'il porte dans un panneau à côté de l'avatar (`src/breign/nativeActions.ts`).
+
 ## Conversation vocale
 
 Un premier geste (« Commencer la conversation ») autorise le micro et le son, puis plus aucun
@@ -128,6 +132,7 @@ src/
   orb/moods.ts             humeurs, couleurs, formes et tailles des codes d'action
   actions/vocabulary.ts    vocabulaire des codes d'action (source de docs/codes-action.md)
   actions/parse.ts         repérage et retrait des codes dans le texte, même en streaming
+  breign/nativeActions.ts  actions natives des messages Breign (image, vidéo, page web)
   avatar/Avatar.ts         chargement GLB (KTX2, meshopt, Draco), mise en pose, blendshapes,
                            clignements, saccades, respiration, mouvements de tête, expressions
   avatar/materials.ts      matériaux physiques : peau (diffusion sous-cutanée approchée, sheen),

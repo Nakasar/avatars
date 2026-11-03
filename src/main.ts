@@ -11,6 +11,7 @@ import { completeLogin, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
 import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
 import type { Expression } from './avatar/Avatar';
+import type { NativeAction } from './breign/nativeActions';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -103,6 +104,64 @@ function testActions(text: string) {
   return cues.length;
 }
 
+// ---------------------------------------------------------------- Actions natives de Breign
+const media = $('media');
+const mediaBody = $('media-body');
+
+/** Montre une image, une vidéo ou une page web envoyée par l'agent (action native Breign). */
+function showMedia(a: Pick<NativeAction, 'kind' | 'url' | 'title'>) {
+  if (!a.url) return false;
+  mediaBody.replaceChildren();
+  let el: HTMLElement;
+  if (a.kind === 'image') {
+    const img = new Image();
+    img.src = a.url;
+    img.alt = a.title ?? '';
+    img.onerror = () => showError('Impossible d’afficher l’image envoyée par l’agent.');
+    el = img;
+  } else if (a.kind === 'video') {
+    const v = document.createElement('video');
+    Object.assign(v, { src: a.url, controls: true, autoplay: true, muted: true, playsInline: true, loop: true });
+    el = v;
+  } else {
+    // Beaucoup de sites refusent d'être intégrés : le lien ↗ reste là pour les ouvrir à part.
+    const f = document.createElement('iframe');
+    f.src = a.url;
+    f.title = a.title ?? 'Page envoyée par l’agent';
+    f.referrerPolicy = 'no-referrer';
+    f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+    el = f;
+  }
+  mediaBody.append(el);
+  media.dataset.kind = a.kind;
+  $('media-title').textContent = a.title ?? '';
+  $<HTMLAnchorElement>('media-open').href = a.url;
+  media.hidden = false;
+  requestAnimationFrame(() => media.classList.add('visible'));
+  // L'orbe accompagne l'apparition d'un petit geste.
+  avatar?.applyAction?.({ raw: '', category: 'FX', value: 'PULSE' });
+  return true;
+}
+
+function hideMedia() {
+  media.classList.remove('visible');
+  setTimeout(() => {
+    if (media.classList.contains('visible')) return;
+    media.hidden = true;
+    mediaBody.replaceChildren(); // arrête une vidéo ou une page en cours
+  }, 300);
+}
+$('media-close').addEventListener('click', hideMedia);
+
+function handleNativeActions(actions: NativeAction[]) {
+  // Plusieurs médias : le dernier l'emporte (un seul panneau à la fois).
+  const shown = [...actions].reverse().find((a) => a.kind !== 'unknown' && a.url);
+  if (shown) showMedia(shown);
+  for (const a of actions) {
+    if (a !== shown) console.info('[breign] action native non gérée :', a.code, a.raw);
+  }
+}
+
 // ---------------------------------------------------------------- Conversation
 const STATE_LABEL: Record<ConversationState, string> = {
   off: 'Touchez l’écran pour commencer',
@@ -122,6 +181,8 @@ const conversation = new Conversation(voice, () => breign, () => avatar, {
   onAgentText: (text) => caption('agent', text || '…'),
   onError: (msg) => showError(msg),
   onLevel: (level) => $('orb').style.setProperty('--level', level.toFixed(3)),
+  onNativeActions: handleNativeActions,
+  onReplyStart: hideMedia,
 });
 
 function caption(kind: 'user' | 'agent', text: string) {
@@ -376,5 +437,6 @@ $('action-copy').addEventListener('click', async (e) => {
 });
 
 // Accès console pour le débogage : actions('[[ACTION.EMOTION.AGGRESSIVE]]').
-Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt });
+// showMedia({ kind: 'image', url: '…', title: '…' }) montre un média comme le ferait l'agent.
+Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions });
 Object.defineProperty(window, 'avatar', { get: () => avatar });

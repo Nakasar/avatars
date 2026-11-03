@@ -28,6 +28,16 @@
       <div id="hint" class="hint">Touchez l’écran pour commencer</div>
     </div>
 
+    <!-- Actions natives de l'agent : image, vidéo ou page web montrée à côté de l'avatar -->
+    <figure id="media" class="media" aria-live="polite" hidden>
+      <div id="media-body" class="media-body"></div>
+      <figcaption>
+        <span id="media-title"></span>
+        <a id="media-open" target="_blank" rel="noopener noreferrer" title="Ouvrir dans un onglet">↗</a>
+        <button type="button" id="media-close" class="icon" title="Fermer" aria-label="Fermer">✕</button>
+      </figcaption>
+    </figure>
+
     <div id="error" class="error" role="alert"></div>
 
     <button id="start" class="start" aria-label="Commencer la conversation">
