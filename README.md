@@ -194,7 +194,7 @@ Le projet est une application Vite statique, configurée par `vercel.json` :
 
 Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. Les variables `VITE_*` de `.env.example` se règlent dans les paramètres du projet Vercel (elles sont intégrées au bundle au build : n'y mettez pas de clé API).
 
-« Se connecter avec Breign » renvoie sur `https://<domaine>/callback` : le client OAuth `breign-cli` n'accepte a priori que les retours loopback, il faut donc un client OAuth Breign enregistré pour le domaine Vercel (`VITE_BREIGN_OAUTH_CLIENT_ID`), ou saisir une clé API dans les réglages.
+« Se connecter avec Breign » renvoie sur `https://<domaine>/callback`. Le client OAuth `breign-cli` n'accepte que les retours loopback (vérifié : `/auth/authorize` répond 400 « Invalid authorization request » pour le domaine Vercel, 302 pour `127.0.0.1`). Il faut donc un client OAuth **public** de l'organisation, avec ce retour dans ses `redirectUris` (`POST /organizations/{organizationId}/oauth-clients`, type `public`, application `web`), puis son id dans la variable Vercel `VITE_BREIGN_OAUTH_CLIENT_ID` et un redéploiement. Sans cela, l'app l'indique et propose la clé API.
 
 ## Limites connues
 
