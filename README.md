@@ -48,7 +48,7 @@ connexion. Une clé API collée à la main reste possible (« Utiliser une clé 
 | Application | Optionnel : application (avatar) Breign. La conversation passe alors par l'application et sa web socket (voix, images et actions de Breign), et sa transcription est utilisée. Sans elle, l'agent répond par l'API des prompts et la voix du navigateur est utilisée. |
 | Instance de l'application | Optionnel : instance de l'app pour cet appareil (une seule socket par instance). Vide : l'instance par défaut. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
-| Apparence du bot | « Humain réaliste » (le modèle 3D) ou « Orbe IA (mascotte) ». L'aperçu change en direct. |
+| Apparence du bot | « Orbe IA (mascotte) », par défaut au chargement, ou « Humain réaliste » (le modèle 3D, chargé seulement s'il est choisi). L'aperçu change en direct. |
 | Couleur de l'orbe | Bleu, orange, vert ou violet. |
 | Modèle 3D | URL d'un GLB (voir plus bas), pour l'apparence humaine. |
 
