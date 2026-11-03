@@ -9,11 +9,6 @@ export interface AppSettings extends BreignSettings {
   appearance: Appearance;
   /** Couleur de l'orbe. */
   orbColor: OrbColor;
-  /**
-   * Web socket de l'application Breign, sur laquelle arrivent les actions natives
-   * (`SHOW_IMAGE`…). `{appId}` et `{apiKey}` y sont remplacés. Vide : pas de connexion.
-   */
-  socketUrl: string;
   /** Compte obtenu par « Se connecter avec Breign » (absent pour une clé collée à la main). */
   account?: BreignAccount;
 }
@@ -36,7 +31,7 @@ export function loadSettings(): AppSettings {
     modelUrl: env.VITE_AVATAR_MODEL_URL || '',
     appearance: env.VITE_AVATAR_APPEARANCE === 'orb' ? 'orb' : 'human',
     orbColor: isOrbColor(env.VITE_AVATAR_ORB_COLOR) ? env.VITE_AVATAR_ORB_COLOR : 'blue',
-    socketUrl: env.VITE_BREIGN_SOCKET_URL || '',
+    instanceId: env.VITE_BREIGN_INSTANCE_ID || '',
   };
   let stored: Partial<AppSettings> = {};
   try {
@@ -48,6 +43,7 @@ export function loadSettings(): AppSettings {
   const fromUrl: Partial<AppSettings> = {};
   if (q.get('agent')) fromUrl.agentId = q.get('agent')!;
   if (q.get('app')) fromUrl.appId = q.get('app')!;
+  if (q.get('instance')) fromUrl.instanceId = q.get('instance')!;
   if (q.get('lang')) fromUrl.lang = q.get('lang')!;
   if (q.get('model')) fromUrl.modelUrl = q.get('model')!;
   if (q.get('look') === 'orb' || q.get('look') === 'human') fromUrl.appearance = q.get('look') as Appearance;

@@ -1,6 +1,6 @@
 /**
  * Vocabulaire des codes d'action que l'agent Breign peut glisser dans ses réponses,
- * par exemple `[[ACTION.EMOTION.AGGRESSIVE]]` ou `[[ACTION.FX.PULSE:3]]`.
+ * par exemple `[ACTION.EMOTION.AGGRESSIVE]` ou `[ACTION.FX.PULSE:3]`.
  *
  * Ce fichier est la source unique : l'orbe s'en sert pour valider les codes, et la
  * documentation (docs/codes-action.md) ainsi que les consignes à donner au prompt de
@@ -39,8 +39,8 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     title: 'Émotions',
     about:
       "Change l'humeur de l'orbe : sa couleur et sa façon de bouger. Dure jusqu'à la réponse suivante ou jusqu'à une autre émotion.",
-    param: 'intensité de 0 à 1 (1 par défaut), ex. `[[ACTION.EMOTION.SAD:0.4]]`',
-    example: '[[ACTION.EMOTION.AGGRESSIVE]] Recule. Tout de suite.',
+    param: 'intensité de 0 à 1 (1 par défaut), ex. `[ACTION.EMOTION.SAD:0.4]`',
+    example: '[ACTION.EMOTION.AGGRESSIVE] Recule. Tout de suite.',
     values: [
       { name: 'NEUTRAL', aliases: ['NEUTRE'], effect: 'revient à la couleur et au comportement par défaut.' },
       { name: 'HAPPY', aliases: ['JOY', 'JOYEUX', 'CONTENT'], effect: 'jaune doré, lumineuse, rebondit et tourne gaiement.' },
@@ -63,9 +63,9 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     name: 'COLOR',
     title: 'Couleurs',
     about:
-      "Impose une couleur, quelle que soit l'émotion. Dure jusqu'à la réponse suivante. `HEX` prend une couleur libre : `[[ACTION.COLOR.HEX:FF3300]]`.",
+      "Impose une couleur, quelle que soit l'émotion. Dure jusqu'à la réponse suivante. `HEX` prend une couleur libre : `[ACTION.COLOR.HEX:FF3300]`.",
     param: 'pour `HEX` uniquement : la couleur en hexadécimal (`FF3300`)',
-    example: 'Regarde, [[ACTION.COLOR.GREEN]] je passe au vert.',
+    example: 'Regarde, [ACTION.COLOR.GREEN] je passe au vert.',
     values: [
       { name: 'RED', aliases: ['ROUGE'], effect: 'rouge.' },
       { name: 'ORANGE', effect: 'orange.' },
@@ -85,8 +85,8 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     title: 'Formes',
     about:
       "L'orbe se reconfigure en une forme et se tourne pour bien la montrer. Elle la garde jusqu'à la réponse suivante (ou pendant la durée donnée), puis reprend sa sphère.",
-    param: 'durée en secondes, ex. `[[ACTION.SHAPE.HEART:4]]`',
-    example: '[[ACTION.SHAPE.TRIANGLE]] Trois côtés, trois options.',
+    param: 'durée en secondes, ex. `[ACTION.SHAPE.HEART:4]`',
+    example: '[ACTION.SHAPE.TRIANGLE] Trois côtés, trois options.',
     values: [
       { name: 'SPHERE', aliases: ['ORB', 'CIRCLE', 'ROND'], effect: 'reprend sa forme de sphère.' },
       { name: 'TRIANGLE', aliases: ['PYRAMID', 'TETRAHEDRON'], effect: 'pyramide triangulaire, un triangle face à vous.' },
@@ -101,8 +101,8 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     title: 'Effets ponctuels',
     about:
       "Un geste précis, qui se superpose à l'émotion. Sans paramètre, il a lieu une fois ; avec une durée, il se répète pendant ce temps.",
-    param: 'durée en secondes, ex. `[[ACTION.FX.BLINK:3]]`',
-    example: 'Attention ! [[ACTION.FX.FLASH]] C’est important.',
+    param: 'durée en secondes, ex. `[ACTION.FX.BLINK:3]`',
+    example: 'Attention ! [ACTION.FX.FLASH] C’est important.',
     values: [
       { name: 'PULSE', aliases: ['BEAT'], effect: 'une pulsation franche, comme un battement.' },
       { name: 'BLINK', aliases: ['CLIGNOTE'], effect: 's’éteint et se rallume deux fois.' },
@@ -117,7 +117,7 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     name: 'SIZE',
     title: 'Taille',
     about: "Change la taille de l'orbe jusqu'à la réponse suivante.",
-    example: '[[ACTION.SIZE.SMALL]] Je me fais toute petite.',
+    example: '[ACTION.SIZE.SMALL] Je me fais toute petite.',
     values: [
       { name: 'SMALL', aliases: ['PETIT'], effect: 'plus petite.' },
       { name: 'NORMAL', effect: 'taille normale.' },
@@ -127,8 +127,8 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
   {
     name: 'RESET',
     title: 'Remise à zéro',
-    about: "`[[ACTION.RESET]]` annule aussitôt émotion, couleur, forme, taille et effets en cours.",
-    example: '[[ACTION.RESET]] Bon, reprenons calmement.',
+    about: "`[ACTION.RESET]` annule aussitôt émotion, couleur, forme, taille et effets en cours.",
+    example: '[ACTION.RESET] Bon, reprenons calmement.',
     values: [],
   },
 ];
@@ -174,7 +174,7 @@ export function resolveAction(body: string, raw = body): ActionCode | undefined 
 /** Tous les codes canoniques, pour les listes de suggestions. */
 export function allActionCodes(): string[] {
   return ACTION_CATEGORIES.flatMap((c) =>
-    c.values.length ? c.values.map((v) => `[[ACTION.${c.name}.${v.name}]]`) : [`[[ACTION.${c.name}]]`],
+    c.values.length ? c.values.map((v) => `[ACTION.${c.name}.${v.name}]`) : [`[ACTION.${c.name}]`],
   );
 }
 
@@ -185,9 +185,9 @@ export function allActionCodes(): string[] {
 export function actionPrompt(): string {
   const lines: string[] = [
     "Tu t'incarnes dans une orbe holographique animée. Tu peux piloter son apparence en glissant des codes d'action dans tes réponses.",
-    "Format : [[ACTION.CATEGORIE.VALEUR]] ou [[ACTION.CATEGORIE.VALEUR:parametre]], en majuscules, sans espace. Les codes ne sont ni affichés ni prononcés : ils s'appliquent au moment où la phrase qui les contient est dite.",
+    "Format : [ACTION.CATEGORIE.VALEUR] ou [ACTION.CATEGORIE.VALEUR:parametre], en majuscules, sans espace. Ce sont des balises d'action : elles ne sont ni affichées ni prononcées, et s'appliquent au moment où la phrase qui les contient est dite.",
     'Règles :',
-    "- Commence chaque réponse par une émotion qui correspond à ton ton, par exemple [[ACTION.EMOTION.CALM]].",
+    "- Commence chaque réponse par une émotion qui correspond à ton ton, par exemple [ACTION.EMOTION.CALM].",
     '- Place les autres codes juste avant les mots qu’ils doivent accompagner.',
     '- Reste sobre : un à trois codes par réponse suffisent en général.',
     "- N'invente pas de code : utilise seulement ceux de la liste. N'explique jamais les codes à l'utilisateur.",
@@ -198,8 +198,8 @@ export function actionPrompt(): string {
   for (const c of ACTION_CATEGORIES) {
     lines.push('', `${c.title} — ${c.about.replace(/`/g, '')}`);
     if (c.param) lines.push(`Paramètre : ${c.param.replace(/`/g, '')}.`);
-    if (!c.values.length) lines.push(`- [[ACTION.${c.name}]]`);
-    for (const v of c.values) lines.push(`- [[ACTION.${c.name}.${v.name}]] : ${v.effect}`);
+    if (!c.values.length) lines.push(`- [ACTION.${c.name}]`);
+    for (const v of c.values) lines.push(`- [ACTION.${c.name}.${v.name}] : ${v.effect}`);
     lines.push(`Exemple : « ${c.example} »`);
   }
   return lines.join('\n');

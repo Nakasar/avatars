@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: true,
           secure: true,
+          ws: true, // web socket des applications (/apps/{appId}/…/sockets)
           rewrite: (path) => path.replace(/^\/breign-api/, ''),
         },
       },
@@ -25,6 +26,7 @@ export default defineConfig(({ mode }) => {
         '/breign-api': {
           target,
           changeOrigin: true,
+          ws: true,
           rewrite: (path) => path.replace(/^\/breign-api/, ''),
         },
       },

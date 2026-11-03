@@ -24,7 +24,7 @@ const R = 0.5;
 /**
  * Formes de l'orbe : 0 sphère, 1 gyroscope, 2 cube, 3 nœud, 4 pyramide, 5 cœur.
  * Au repos et en réfléchissant, elle n'utilise d'elle-même que les quatre premières ; les
- * autres viennent des codes d'action (`[[ACTION.SHAPE.TRIANGLE]]`…).
+ * autres viennent des codes d'action (`[ACTION.SHAPE.TRIANGLE]`…).
  */
 const AUTO_SHAPES = 4;
 const MORPHS = 5;
@@ -41,7 +41,7 @@ const MORPHS = 5;
  *  - quand elle parle, son cœur et sa surface pulsent avec l'énergie de sa voix.
  *
  * L'agent peut aussi la piloter par des codes d'action glissés dans ses réponses
- * (`[[ACTION.EMOTION.AGGRESSIVE]]`, `[[ACTION.SHAPE.HEART]]`, `[[ACTION.FX.BLINK]]`…) :
+ * (`[ACTION.EMOTION.AGGRESSIVE]`, `[ACTION.SHAPE.HEART]`, `[ACTION.FX.BLINK]`…) :
  * voir `applyAction` et src/actions/vocabulary.ts.
  */
 export class Orb implements Character {

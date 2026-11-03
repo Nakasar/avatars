@@ -160,3 +160,11 @@ body[data-state='off'] .presence { opacity: 0; }
   .media-body img, .media-body video { max-height: 34vh; }
   .media-body iframe { height: 40vh; }
 }
+
+/* Relances proposées par l'agent (SHOW_SUGGESTIONS) */
+.suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; pointer-events: auto; }
+.suggestions:empty { display: none; }
+.suggestions button {
+  font-size: 13px; padding: 7px 12px; border-radius: 999px;
+  background: rgba(10, 9, 8, 0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}

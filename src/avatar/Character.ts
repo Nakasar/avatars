@@ -29,7 +29,7 @@ export interface Character {
   lookAt(world: THREE.Vector3): void;
   update(dt: number, t: number): void;
   /**
-   * Applique un code d'action envoyé par l'agent (`[[ACTION.EMOTION.AGGRESSIVE]]`…).
+   * Applique un code d'action envoyé par l'agent (`[ACTION.EMOTION.AGGRESSIVE]`…).
    * Renvoie `false` si l'apparence ne sait pas le jouer.
    */
   applyAction?(code: ActionCode): boolean;

@@ -16,13 +16,14 @@ export interface ParsedText {
 }
 
 /**
- * `[[ACTION.X.Y]]`, `[[ ACTION.X.Y:param ]]`… L'agent pouvant se tromper de casse ou
- * glisser des espaces, la reconnaissance est tolérante. Les codes sont aussi retirés
- * s'ils sont échappés en Markdown (`\[\[ACTION…\]\]`).
+ * `[ACTION.X.Y]` (balise d'action native de Breign), `[[ACTION.X.Y]]`,
+ * `[[ ACTION.X.Y:param ]]`… L'agent pouvant se tromper de casse ou glisser des espaces, la
+ * reconnaissance est tolérante. Les codes sont aussi retirés s'ils sont échappés en
+ * Markdown (`\[\[ACTION…\]\]`).
  */
-const CODE = /\\?\[\\?\[\s*(ACTION\b[^\]\n]{0,120}?)\s*\\?\]\\?\]/gi;
+const CODE = /\\?\[(?:\\?\[)?\s*(ACTION\.[^\]\n]{0,160}?)\s*\\?\](?:\\?\])?/gi;
 /** Début de code pas encore complet, en fin de texte pendant le streaming. */
-const PARTIAL = /\\?\[(?:\\?\[(?:\s*[A-Z][^\]\n]{0,120}(?:\\?\])?)?)?$/i;
+const PARTIAL = /\\?\[(?:\\?\[)?(?:\s*[A-Z][^\]\n]{0,160}(?:\\?\])?)?$/i;
 
 /**
  * Sépare un texte de ses codes d'action.
