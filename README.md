@@ -184,6 +184,18 @@ Creator 4 (profil ARKit) ou un MetaHuman exporté en glTF. Pensez à optimiser l
 npx @gltf-transform/cli optimize in.glb out.glb --compress meshopt --texture-compress webp --texture-size 2048 --simplify false
 ```
 
+## Déploiement sur Vercel
+
+Le projet est une application Vite statique, configurée par `vercel.json` :
+
+- `/breign-api/*` est réécrit vers `https://api.breign.eu/*` (même rôle que le proxy de dev, pas de souci de CORS) ;
+- les autres chemins (dont `/callback`) servent `index.html` ;
+- la web socket des applications ne passe pas par ces réécritures (Vercel ne relaie pas les web sockets) : hors de `localhost`, l'app se connecte directement à `VITE_BREIGN_SOCKET_URL` (par défaut `wss://api.breign.eu`).
+
+Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. Les variables `VITE_*` de `.env.example` se règlent dans les paramètres du projet Vercel (elles sont intégrées au bundle au build : n'y mettez pas de clé API).
+
+« Se connecter avec Breign » renvoie sur `https://<domaine>/callback` : le client OAuth `breign-cli` n'accepte a priori que les retours loopback, il faut donc un client OAuth Breign enregistré pour le domaine Vercel (`VITE_BREIGN_OAUTH_CLIENT_ID`), ou saisir une clé API dans les réglages.
+
 ## Limites connues
 
 - La clé obtenue à la connexion est une clé API complète de l'utilisateur, gardée dans le
