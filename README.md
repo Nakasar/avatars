@@ -45,14 +45,15 @@ connexion. Une clé API collée à la main reste possible (« Utiliser une clé 
 | URL de l'API | `/breign-api` par défaut : proxy Vite vers `https://api.breign.eu` (évite le CORS en local). |
 | Compte Breign | « Se connecter avec Breign » (OAuth2), ou une clé API collée à la main. La clé est envoyée en en-tête `X-API-Key` et stockée dans ce navigateur. |
 | Agent | Id de l'agent qui répond. Le bouton « Lister » interroge `GET /agents`. |
-| Application | Optionnel : application (avatar) Breign. Active sa voix (`POST /apps/{id}/text-to-speech`) et sa transcription. Sans elle, la voix du navigateur est utilisée. |
+| Application | Optionnel : application (avatar) Breign. La conversation passe alors par l'application et sa web socket (voix, images et actions de Breign), et sa transcription est utilisée. Sans elle, l'agent répond par l'API des prompts et la voix du navigateur est utilisée. |
+| Instance de l'application | Optionnel : instance de l'app pour cet appareil (une seule socket par instance). Vide : l'instance par défaut. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
 | Apparence du bot | « Humain réaliste » (le modèle 3D) ou « Orbe IA (mascotte) ». L'aperçu change en direct. |
 | Couleur de l'orbe | Bleu, orange, vert ou violet. |
 | Modèle 3D | URL d'un GLB (voir plus bas), pour l'apparence humaine. |
 
 Les mêmes valeurs peuvent venir de `.env.local` (voir `.env.example`) ou de l'URL :
-`?agent=…&app=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
+`?agent=…&app=…&instance=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
 
 Le bouton « Tester la voix » des réglages fait parler l'avatar sans connexion à Breign.
 
@@ -71,6 +72,37 @@ autour d'un cœur lumineux. Elle flotte, respire et réagit à la conversation :
 
 Les expressions se traduisent aussi : joie (plus vive, rebond), surprise (sursaut), tristesse
 (plus terne, plus lente). Tout est procédural (`src/orb/Orb.ts`), sans fichier à charger.
+
+### Codes d'action : l'agent pilote l'orbe
+
+L'agent peut glisser des codes dans ses réponses pour changer l'émotion, la couleur ou la
+forme de l'orbe, ou déclencher un effet précis :
+
+```
+[ACTION.EMOTION.AGGRESSIVE] Recule. [ACTION.FX.PULSE] Tout de suite.
+[ACTION.SHAPE.TRIANGLE] Trois options. [ACTION.SHAPE.SQUARE] Quatre côtés.
+[ACTION.COLOR.HEX:FF3300] [ACTION.FX.BLINK:3] [ACTION.SIZE.LARGE] [ACTION.RESET]
+```
+
+Les codes sont retirés des sous-titres et de la voix, et se déclenchent au moment où la voix
+arrive à leur place. Émotions (neutre, joie, tristesse, colère, peur, calme, curiosité,
+surprise, perplexité, fierté, tendresse), couleurs, formes (sphère, triangle, carré, cœur,
+anneaux, nœud), effets (pulsation, clignement, éclair, tremblement, tourbillon, grésillement,
+hochement) et taille. La liste complète et les consignes à coller dans le prompt de l'agent
+sont dans [docs/codes-action.md](docs/codes-action.md) ; les réglages permettent de tester un
+code et de copier ces consignes.
+
+### Avec une application Breign : la web socket
+
+Quand une application (avatar) est choisie dans les réglages, l'avatar suit l'intégration
+Breign à deux canaux : la question part par l'API (`POST /apps/{appId}/chats?instanceId=…`), et
+la réponse arrive sur la web socket de l'instance
+(`wss://api.breign.eu/apps/{appId}/instances/{instanceId}/sockets`) : phrases `SAY` avec leur
+audio déjà synthétisé (remises dans l'ordre des `sequence`), `SHOW_IMAGE` (image affichée à
+côté de l'avatar), `DO_ACTION` (balises d'action, dont les codes de l'orbe), `SHOW_SUGGESTIONS`,
+`INTERRUPT`… Le secret de l'app est lu avec le compte connecté. Une instance par appareil :
+réglage « Instance de l'application », `VITE_BREIGN_INSTANCE_ID` ou `?instance=…`. Détails dans
+[docs/codes-action.md](docs/codes-action.md).
 
 ## Conversation vocale
 
@@ -106,6 +138,12 @@ src/
                            MSAA, GTAO, bloom léger, finition photo (vignettage, grain)
   avatar/Character.ts      interface commune aux apparences (humain, orbe)
   orb/Orb.ts               orbe IA : particules et shaders, formes, réactions aux états
+  orb/moods.ts             humeurs, couleurs, formes et tailles des codes d'action
+  actions/vocabulary.ts    vocabulaire des codes d'action (source de docs/codes-action.md)
+  actions/parse.ts         repérage et retrait des codes dans le texte, même en streaming
+  breign/AppSocket.ts      web socket de l'application : authentification, ping, rejeu
+  breign/nativeActions.ts  actions natives des messages Breign (image, vidéo, page web)
+  conversation/AppReplies.ts  réponses reçues sur la socket : tours, ordre des phrases, médias
   avatar/Avatar.ts         chargement GLB (KTX2, meshopt, Draco), mise en pose, blendshapes,
                            clignements, saccades, respiration, mouvements de tête, expressions
   avatar/materials.ts      matériaux physiques : peau (diffusion sous-cutanée approchée, sheen),

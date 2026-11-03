@@ -1,10 +1,28 @@
 import { AudioLipsync, TextLipsync, type VisemeFrame } from './lipsync';
+import { parseActions } from '../actions/parse';
+import type { ActionCode } from '../actions/vocabulary';
 
 export type TtsFn = (text: string) => Promise<string | null>;
 
 interface Utterance {
   text: string;
   audio: Promise<AudioBuffer | null>;
+  /** Codes d'action, avec leur position relative (0–1) dans la phrase. */
+  cues: Array<{ code: ActionCode; at: number }>;
+  /** Appelés quand la phrase commence (ou est sautée), puis quand elle est finie. */
+  onStart?: () => void;
+  onEnd?: () => void;
+}
+
+export interface PreparedSpeech {
+  /** Texte de la phrase (sous-titre, et voix du navigateur si l'audio manque). */
+  text: string;
+  /** Audio déjà synthétisé (`SAY.audio.src` de Breign). Absent : voix du navigateur. */
+  audioSrc?: string;
+  /** Texte muet : seul l'audio est joué (média sonore envoyé par Breign avec `text: "-"`). */
+  silent?: boolean;
+  onStart?: () => void;
+  onEnd?: () => void;
 }
 
 /**
@@ -21,8 +39,11 @@ export class Voice {
   private mode: 'audio' | 'text' | 'idle' = 'idle';
   private current?: AudioBufferSourceNode;
   private generation = 0;
+  private pendingCues: Array<{ code: ActionCode; timer: number }> = [];
 
   onSpeakingChange?: (speaking: boolean) => void;
+  /** Un code d'action arrive au moment où la voix prononce le passage qui le contient. */
+  onCue?: (code: ActionCode) => void;
 
   constructor(private tts: TtsFn, public lang = 'fr') {
     this.analyser.connect(this.ctx.destination);
@@ -37,15 +58,45 @@ export class Voice {
     return this.playing;
   }
 
+  /**
+   * Ajoute une phrase à dire. Elle peut contenir des codes d'action (`[ACTION.…]`) :
+   * ils ne sont pas prononcés, mais déclenchés (`onCue`) au moment où la voix arrive à
+   * leur place dans la phrase.
+   */
   say(text: string) {
-    const clean = stripMarkdown(text);
-    if (!clean) return;
-    this.queue.push({ text: clean, audio: this.synthesize(clean) });
+    const parsed = parseActions(text);
+    const len = Math.max(1, parsed.text.length);
+    const cues = parsed.cues.map((c) => ({ code: c.code, at: c.offset / len }));
+    const clean = stripMarkdown(parsed.text);
+    if (!clean && !cues.length) return;
+    const audio = clean ? this.synthesize(clean) : Promise.resolve(null);
+    this.queue.push({ text: clean, audio, cues });
     if (!this.playing) void this.drain();
+  }
+
+  /**
+   * Ajoute une phrase dont l'audio est déjà prêt (réponse reçue sur la web socket de
+   * l'application Breign). Les codes d'action restés dans le texte sont joués comme avec `say`.
+   */
+  sayPrepared(p: PreparedSpeech) {
+    const parsed = parseActions(p.silent ? '' : p.text);
+    const len = Math.max(1, parsed.text.length);
+    const cues = parsed.cues.map((c) => ({ code: c.code, at: c.offset / len }));
+    const clean = stripMarkdown(parsed.text);
+    const audio = p.audioSrc ? this.load(p.audioSrc) : Promise.resolve(null);
+    // Sans audio et sans texte, il n'y a rien à dire : la phrase est « jouée » aussitôt.
+    this.queue.push({ text: p.audioSrc ? clean || ' ' : clean, audio, cues, onStart: p.onStart, onEnd: p.onEnd });
+    if (!this.playing) void this.drain();
+  }
+
+  /** Une phrase est en cours ou en attente. */
+  get busy() {
+    return this.playing || this.queue.length > 0;
   }
 
   stop() {
     this.generation++;
+    this.clearCues();
     this.queue = [];
     this.current?.stop();
     speechSynthesis.cancel();
@@ -61,12 +112,21 @@ export class Voice {
   private async synthesize(text: string): Promise<AudioBuffer | null> {
     try {
       const src = await this.tts(text);
-      if (!src) return null;
+      return src ? await this.load(src) : null;
+    } catch (e) {
+      console.warn('[voice] synthèse Breign indisponible, voix du navigateur utilisée', e);
+      return null;
+    }
+  }
+
+  /** Télécharge et décode un audio (les URL présignées de Breign expirent : tout de suite). */
+  private async load(src: string): Promise<AudioBuffer | null> {
+    try {
       const res = await fetch(src);
       if (!res.ok) throw new Error(`audio HTTP ${res.status}`);
       return await this.ctx.decodeAudioData(await res.arrayBuffer());
     } catch (e) {
-      console.warn('[voice] synthèse Breign indisponible, voix du navigateur utilisée', e);
+      console.warn('[voice] audio illisible, voix du navigateur utilisée', e);
       return null;
     }
   }
@@ -78,10 +138,52 @@ export class Voice {
       const u = this.queue.shift()!;
       const buffer = await u.audio;
       if (gen !== this.generation) return;
+      u.onStart?.();
+      if (!u.text.trim() && !buffer) {
+        // Codes seuls, sans rien à dire : ils s'appliquent tout de suite.
+        for (const c of u.cues) this.onCue?.(c.code);
+        u.onEnd?.();
+        continue;
+      }
+      // Les codes sont placés au prorata de leur position dans la phrase.
+      const duration = buffer ? buffer.duration : u.text.length * 0.065;
+      this.scheduleCues(u.cues, duration);
       if (buffer) await this.playBuffer(buffer);
       else await this.speakWithBrowser(u.text);
+      if (gen !== this.generation) return;
+      this.clearCues(true);
+      u.onEnd?.();
     }
     if (gen === this.generation) this.setPlaying(false);
+  }
+
+  private scheduleCues(cues: Utterance['cues'], duration: number) {
+    for (const c of cues) {
+      const delay = c.at * duration * 1000;
+      if (delay < 30) {
+        this.onCue?.(c.code);
+        continue;
+      }
+      const pending = { code: c.code, timer: 0 };
+      pending.timer = window.setTimeout(() => {
+        this.pendingCues = this.pendingCues.filter((p) => p !== pending);
+        this.onCue?.(c.code);
+      }, delay);
+      this.pendingCues.push(pending);
+    }
+  }
+
+  /**
+   * Annule les codes en attente (voix coupée), ou (`flush`) déclenche aussitôt ceux qui
+   * restent quand la phrase s'est finie plus tôt que prévu.
+   */
+  private clearCues(flush = false) {
+    const left = this.pendingCues;
+    this.pendingCues = [];
+    for (const p of left) {
+      clearTimeout(p.timer);
+      if (flush) this.onCue?.(p.code);
+    }
   }
 
   private playBuffer(buffer: AudioBuffer) {

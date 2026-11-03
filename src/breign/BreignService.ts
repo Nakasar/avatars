@@ -1,11 +1,13 @@
 import {
   AgentApi,
   AppApi,
+  AppStatusUio,
   Configuration,
   PromptsApi,
   ResponseError,
   type AgentUio,
 } from '@breign/client';
+import { collectNativeActions, type NativeAction } from './nativeActions';
 
 export interface BreignSettings {
   /** URL de l'API. En dev, `/breign-api` passe par le proxy Vite vers https://api.breign.eu. */
@@ -14,6 +16,11 @@ export interface BreignSettings {
   agentId: string;
   /** Application (avatar) Breign : active la voix (TTS) et la transcription configurées. */
   appId?: string;
+  /**
+   * Instance de l'application : chaque appareil ou onglet qui affiche l'avatar a la sienne
+   * (une seule socket par instance). Vide : l'instance par défaut de l'app.
+   */
+  instanceId?: string;
   lang: string;
 }
 
@@ -39,6 +46,9 @@ export class BreignService {
   private agents: AgentApi;
   private apps: AppApi;
   conversationId?: string;
+  /** Conversation menée par l'application (réponses reçues sur la web socket). */
+  appConversationId?: string;
+  private authSecret?: Promise<string>;
 
   constructor(readonly settings: BreignSettings) {
     const config = new Configuration({
@@ -56,6 +66,59 @@ export class BreignService {
 
   resetConversation() {
     this.conversationId = undefined;
+    this.appConversationId = undefined;
+  }
+
+  private get instance() {
+    const id = this.settings.instanceId?.trim();
+    return id && id !== 'DEFAULT' ? id : undefined;
+  }
+
+  /**
+   * Secret de l'application, pour authentifier sa web socket. Il est lu dans la liste des
+   * apps de l'agent (`GET /agents/{agentId}/apps`) avec le compte connecté : il ne quitte
+   * jamais la mémoire de la page.
+   */
+  appAuthSecret(): Promise<string> {
+    this.authSecret ??= (async () => {
+      const { appId, agentId } = this.settings;
+      const apps = await this.apps.getAppsForAgentId(agentId);
+      const app = apps.find((a) => a.id === appId);
+      if (!app) throw new Error('Application introuvable parmi celles de l’agent : vérifiez l’agent et l’application dans les réglages.');
+      return app.authSecret;
+    })();
+    this.authSecret.catch(() => (this.authSecret = undefined));
+    return this.authSecret;
+  }
+
+  /**
+   * Envoie un message par l'application : la requête rend la main tout de suite, la réponse
+   * arrive sur la web socket (`INPUT`, `SAY`…) avec le `messageId` renvoyé ici.
+   */
+  async askApp(message: string): Promise<string | undefined> {
+    const { appId, lang } = this.settings;
+    if (!appId) throw new Error('Aucune application Breign configurée.');
+    if (this.appConversationId) {
+      const res = await this.apps.submitNewMessageToChat(appId, this.appConversationId, { message, lang }, this.instance);
+      const r = res as unknown as { conversationId?: string; messageId?: string };
+      if (r.conversationId) this.appConversationId = r.conversationId;
+      return r.messageId;
+    }
+    const res = await this.apps.createAppChat(appId, { message, lang }, this.instance);
+    this.appConversationId = res.conversationId;
+    return res.messageId;
+  }
+
+  /** Prévient Breign que l'avatar s'est tu (l'utilisateur lui a coupé la parole). */
+  async interruptApp() {
+    if (!this.settings.appId) return;
+    await this.apps.interruptApp(this.settings.appId, this.instance);
+  }
+
+  /** Fin de réponse : seul le client sait quand il a fini de parler. */
+  async setAppIdle() {
+    if (!this.settings.appId) return;
+    await this.apps.setStatus(this.settings.appId, { status: AppStatusUio.Idle }, this.instance);
   }
 
   async listAgents(): Promise<AgentUio[]> {
@@ -68,12 +131,14 @@ export class BreignService {
 
   /**
    * Envoie un message à l'agent et suit la génération de la réponse.
-   * `onProgress` est appelé à chaque évolution du texte.
+   * `onProgress` est appelé à chaque évolution du texte ; `onActions` reçoit, une fois la
+   * réponse terminée, ses actions natives (montrer une image, ouvrir une page…).
    */
   async send(
     message: string,
     onProgress: (p: ReplyProgress) => void,
     signal?: AbortSignal,
+    onActions?: (actions: NativeAction[]) => void,
   ): Promise<string> {
     const { agentId, lang } = this.settings;
     const res = this.conversationId
@@ -88,6 +153,7 @@ export class BreignService {
     // Réponse synchrone (serveur sans mode asynchrone) : le texte est déjà là.
     if (res.text) {
       onProgress({ text: res.text, status: 'completed', done: true });
+      if (onActions) void this.fetchActions(res.conversationId, res.messageId, signal).then(onActions);
       return res.text;
     }
 
@@ -112,7 +178,26 @@ export class BreignService {
       if (st.status === 'moderated') {
         return text || 'Ce message a été bloqué par les règles de l’organisation.';
       }
-      if (done) return text;
+      if (done) {
+        if (onActions) void this.fetchActions(res.conversationId, res.messageId, signal).then(onActions);
+        return text;
+      }
+    }
+  }
+
+  /**
+   * Actions natives d'un message (le statut de génération ne les porte pas : il faut relire
+   * le message une fois terminé). Ne lève jamais : sans actions, renvoie une liste vide.
+   */
+  async fetchActions(conversationId: string, messageId: string, signal?: AbortSignal): Promise<NativeAction[]> {
+    try {
+      const msg = await this.prompts.getMessageById(conversationId, messageId, { signal });
+      const actions = collectNativeActions(msg);
+      if (actions.length) console.info('[breign] actions natives :', actions.map((a) => a.raw));
+      return actions;
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') console.warn('[breign] actions du message illisibles', e);
+      return [];
     }
   }
 

@@ -8,6 +8,12 @@ import { BreignService, describeError, type BreignSettings } from './breign/Brei
 import { Conversation, type ConversationState } from './conversation/Conversation';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, revokeLogin, startLogin } from './breign/oauth';
+import { parseActions } from './actions/parse';
+import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
+import type { Expression } from './avatar/Avatar';
+import type { NativeAction } from './breign/nativeActions';
+import { AppSocket, appSocketUrl, type AppMessage, type SocketState } from './breign/AppSocket';
+import { resolveAction } from './actions/vocabulary';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -72,6 +78,185 @@ stage.onUpdate((dt, t) => {
   avatar.update(dt, t);
 });
 
+// ---------------------------------------------------------------- Codes d'action de l'agent
+/** Pour l'humain, qui n'a ni couleur ni forme : seules les émotions proches sont jouées. */
+const HUMAN_EXPRESSIONS: Record<string, [Expression, number]> = {
+  NEUTRAL: ['neutral', 1], HAPPY: ['happy', 0.9], PROUD: ['happy', 0.5], LOVING: ['happy', 0.6],
+  SAD: ['sad', 0.8], AFRAID: ['surprised', 0.5], SURPRISED: ['surprised', 0.9],
+  CURIOUS: ['thinking', 0.5], CONFUSED: ['thinking', 0.8], CALM: ['neutral', 1], AGGRESSIVE: ['neutral', 1],
+};
+
+function applyAction(code: ActionCode) {
+  if (!avatar) return;
+  if (avatar.applyAction?.(code)) return;
+  if (code.category === 'EMOTION' && HUMAN_EXPRESSIONS[code.value]) {
+    const [name, k] = HUMAN_EXPRESSIONS[code.value];
+    avatar.setExpression(name, k * (code.param ? parseFloat(code.param) || 1 : 1));
+  } else if (code.category === 'FX' && (code.value === 'NOD' || code.value === 'PULSE')) avatar.nod();
+  else if (code.category === 'RESET') avatar.setExpression('neutral', 1);
+  else console.info('[actions] code non joué par cette apparence :', code.raw);
+}
+voice.onCue = applyAction;
+
+/** Joue tout de suite les codes d'un texte (champ de test des réglages, console). */
+function testActions(text: string) {
+  const { cues, unknown } = parseActions(text.includes('[') ? text : `[${text}]`);
+  for (const c of cues) applyAction(c.code);
+  if (unknown.length) showError(`Code inconnu : ${unknown.join(' ')}`);
+  return cues.length;
+}
+
+// ---------------------------------------------------------------- Actions natives de Breign
+const media = $('media');
+const mediaBody = $('media-body');
+
+/** Montre une image, une vidéo ou une page web envoyée par l'agent (action native Breign). */
+function showMedia(a: Pick<NativeAction, 'kind' | 'url' | 'title'>) {
+  if (!a.url) return false;
+  mediaBody.replaceChildren();
+  let el: HTMLElement;
+  if (a.kind === 'image') {
+    const img = new Image();
+    img.src = a.url;
+    img.alt = a.title ?? '';
+    img.onerror = () => showError('Impossible d’afficher l’image envoyée par l’agent.');
+    el = img;
+  } else if (a.kind === 'video') {
+    const v = document.createElement('video');
+    Object.assign(v, { src: a.url, controls: true, autoplay: true, muted: true, playsInline: true, loop: true });
+    el = v;
+  } else {
+    // Beaucoup de sites refusent d'être intégrés : le lien ↗ reste là pour les ouvrir à part.
+    const f = document.createElement('iframe');
+    f.src = a.url;
+    f.title = a.title ?? 'Page envoyée par l’agent';
+    f.referrerPolicy = 'no-referrer';
+    f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+    el = f;
+  }
+  mediaBody.append(el);
+  media.dataset.kind = a.kind;
+  $('media-title').textContent = a.title ?? '';
+  $<HTMLAnchorElement>('media-open').href = a.url;
+  media.hidden = false;
+  requestAnimationFrame(() => media.classList.add('visible'));
+  // L'orbe accompagne l'apparition d'un petit geste.
+  avatar?.applyAction?.({ raw: '', category: 'FX', value: 'PULSE' });
+  return true;
+}
+
+function hideMedia() {
+  media.classList.remove('visible');
+  setTimeout(() => {
+    if (media.classList.contains('visible')) return;
+    media.hidden = true;
+    mediaBody.replaceChildren(); // arrête une vidéo ou une page en cours
+  }, 300);
+}
+$('media-close').addEventListener('click', hideMedia);
+
+function handleNativeActions(actions: NativeAction[]) {
+  // Plusieurs médias : le dernier l'emporte (un seul panneau à la fois).
+  const shown = [...actions].reverse().find((a) => a.kind !== 'unknown' && a.url);
+  if (shown) showMedia(shown);
+  for (const a of actions) {
+    if (a !== shown) console.info('[breign] action native non gérée :', a.code, a.raw);
+  }
+}
+
+/** `DO_ACTION` de Breign : balise d'action de la réponse (`[ACTION.EMOTION.HAPPY]`) ou outil. */
+function handleAppAction(a: NonNullable<AppMessage['action']>) {
+  const code = resolveAction(a.code);
+  if (code) return applyAction(code);
+  const type = String(a.type ?? '').toUpperCase();
+  if (type === 'PLAY_ANIMATION') {
+    // Une animation au nom d'un effet ou d'une émotion de l'orbe (« pulse », « happy »…) est jouée.
+    const id = String(a.animationId ?? '');
+    const as = resolveAction(`FX.${id}`) ?? resolveAction(`EMOTION.${id}`);
+    if (as) return applyAction(as);
+  }
+  if (type === 'APP_SHOW_PAGE' && typeof a.url === 'string') {
+    return void showMedia({ kind: 'url', url: pageUrl(a.url, a.query), title: a.code });
+  }
+  console.info('[breign] action non gérée :', a.code, a);
+}
+
+/** Complète les paramètres demandés par `APP_SHOW_PAGE` (`query: { conversationId: true }`). */
+function pageUrl(url: string, query: unknown) {
+  const u = new URL(url, location.href);
+  const known: Record<string, string | undefined> = {
+    conversationId: breign.appConversationId,
+    appId: settings.appId,
+    agentId: settings.agentId,
+    instanceId: settings.instanceId,
+    lang: settings.lang,
+  };
+  for (const [k, v] of Object.entries((query ?? {}) as Record<string, unknown>)) {
+    // La clé API n'est jamais transmise à une page tierce.
+    if (v === true && known[k]) u.searchParams.set(k, known[k]!);
+    else if (typeof v === 'string' || typeof v === 'number') u.searchParams.set(k, String(v));
+  }
+  return u.toString();
+}
+
+// Relances proposées en fin de réponse : un clic les envoie comme message suivant.
+const suggestionBox = $('suggestions');
+function showSuggestions(list: Array<{ id: string; text: string }>) {
+  suggestionBox.replaceChildren(
+    ...list.map((s) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = s.text;
+      b.onclick = () => {
+        suggestionBox.replaceChildren();
+        void begin().then(() => conversation.sendText(s.text));
+      };
+      return b;
+    }),
+  );
+}
+
+// Web socket de l'application : la plateforme y pousse les réponses de l'avatar (SAY avec
+// la voix déjà synthétisée, SHOW_IMAGE, DO_ACTION…). Tant qu'elle n'est pas prête, la
+// conversation passe par l'API des agents.
+let socket: AppSocket | undefined;
+let socketKey = '';
+const SOCKET_LABEL: Record<SocketState, string> = {
+  connecting: 'Connexion à la web socket…',
+  authenticating: 'Authentification de la web socket…',
+  ready: 'Web socket connectée ✓',
+  closed: '',
+  failed: 'Web socket indisponible : réponses par l’API des agents.',
+};
+function connectSocket() {
+  const { appId, agentId, apiKey, basePath, instanceId } = settings;
+  const key = appId && agentId && apiKey ? [basePath, appId, instanceId, agentId, apiKey].join('|') : '';
+  if (key === socketKey) return;
+  socket?.close();
+  socket = undefined;
+  socketKey = key;
+  conversation.appMode = false;
+  $('socket-status').textContent = '';
+  if (!key) return;
+  const s = new AppSocket({
+    url: appSocketUrl(basePath, appId!, instanceId),
+    authSecret: () => breign.appAuthSecret(),
+    onMessage: (m) => conversation.onAppMessage(m),
+    onState: (state, detail) => {
+      if (s !== socket) return;
+      conversation.appMode = state === 'ready';
+      $('socket-status').textContent = SOCKET_LABEL[state];
+      if (detail) showError(detail);
+    },
+  });
+  socket = s;
+  s.connect();
+}
+window.addEventListener('pagehide', () => socket?.close());
+
+/** Joue un message comme s'il venait de la web socket : appSocketMessage({ type: 'SHOW_IMAGE', … }). */
+const appSocketMessage = (m: AppMessage) => conversation.onAppMessage(m);
+
 // ---------------------------------------------------------------- Conversation
 const STATE_LABEL: Record<ConversationState, string> = {
   off: 'Touchez l’écran pour commencer',
@@ -91,6 +276,13 @@ const conversation = new Conversation(voice, () => breign, () => avatar, {
   onAgentText: (text) => caption('agent', text || '…'),
   onError: (msg) => showError(msg),
   onLevel: (level) => $('orb').style.setProperty('--level', level.toFixed(3)),
+  onNativeActions: handleNativeActions,
+  onReplyStart: () => {
+    hideMedia();
+    suggestionBox.replaceChildren();
+  },
+  onAppAction: handleAppAction,
+  onSuggestions: showSuggestions,
 });
 
 function caption(kind: 'user' | 'agent', text: string) {
@@ -263,19 +455,21 @@ $<HTMLSelectElement>('agent-list').addEventListener('change', (e) => {
 $('demo').addEventListener('click', () => {
   voice.unlock();
   conversation.interrupt();
+  avatar?.resetActions?.();
   voice.lang = (form.elements.namedItem('lang') as HTMLSelectElement).value;
   avatar?.setMode('speaking');
   avatar?.setExpression('happy', 0.5);
   voice.say(
     voice.lang === 'fr'
-      ? 'Bonjour ! Je suis votre avatar Breign. Parlez-moi simplement, je vous écoute, et vous pouvez me couper la parole quand vous voulez.'
-      : 'Hello! I am your Breign avatar. Just talk to me, I am listening, and feel free to interrupt me at any time.',
+      ? '[ACTION.EMOTION.HAPPY] Bonjour ! Je suis votre avatar Breign. [ACTION.FX.PULSE] Parlez-moi simplement, je vous écoute, et vous pouvez me couper la parole quand vous voulez.'
+      : '[ACTION.EMOTION.HAPPY] Hello! I am your Breign avatar. [ACTION.FX.PULSE] Just talk to me, I am listening, and feel free to interrupt me at any time.',
   );
 });
 
 async function applySettings() {
   breign = new BreignService(settings);
   voice.lang = settings.lang;
+  connectSocket();
   if (!breign.configured) {
     $('agent-name').textContent = '';
     return;
@@ -319,6 +513,31 @@ async function boot() {
 }
 void boot();
 
-// Accès console pour le débogage.
-Object.assign(window, { stage, voice, conversation, THREE });
+// ---------------------------------------------------------------- Test des codes d'action
+const codeList = $<HTMLDataListElement>('action-codes');
+for (const c of allActionCodes()) codeList.append(new Option(c));
+const codeInput = $<HTMLInputElement>('action-test');
+$('action-run').addEventListener('click', () => {
+  if (codeInput.value.trim()) testActions(codeInput.value);
+});
+codeInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (codeInput.value.trim()) testActions(codeInput.value);
+});
+$('action-reset').addEventListener('click', () => testActions('[ACTION.RESET]'));
+$('action-copy').addEventListener('click', async (e) => {
+  const btn = e.currentTarget as HTMLButtonElement;
+  try {
+    await navigator.clipboard.writeText(actionPrompt());
+    btn.textContent = 'Consignes copiées ✓';
+  } catch {
+    showError('Copie impossible : les consignes sont dans docs/codes-action.md.');
+  }
+  setTimeout(() => (btn.textContent = 'Copier les consignes pour l’agent'), 2500);
+});
+
+// Accès console pour le débogage : actions('[ACTION.EMOTION.AGGRESSIVE]').
+// showMedia({ kind: 'image', url: '…', title: '…' }) montre un média comme le ferait l'agent.
+Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
 Object.defineProperty(window, 'avatar', { get: () => avatar });

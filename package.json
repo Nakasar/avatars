@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "setup": "node scripts/setup-assets.mjs",
-    "postinstall": "node scripts/setup-assets.mjs"
+    "postinstall": "node scripts/setup-assets.mjs",
+    "actions:doc": "node scripts/actions-doc.mjs"
   },
   "license": "UNLICENSED",
   "dependencies": {

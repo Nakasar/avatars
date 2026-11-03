@@ -20,6 +20,7 @@
     <section class="captions" aria-live="polite">
       <p id="caption-user" class="caption user"></p>
       <p id="caption-agent" class="caption agent"></p>
+      <div id="suggestions" class="suggestions"></div>
     </section>
 
     <!-- Indicateur d'état : pas de bouton, juste un témoin d'écoute -->
@@ -27,6 +28,16 @@
       <div id="orb" class="orb" aria-hidden="true"><span></span></div>
       <div id="hint" class="hint">Touchez l’écran pour commencer</div>
     </div>
+
+    <!-- Actions natives de l'agent : image, vidéo ou page web montrée à côté de l'avatar -->
+    <figure id="media" class="media" aria-live="polite" hidden>
+      <div id="media-body" class="media-body"></div>
+      <figcaption>
+        <span id="media-title"></span>
+        <a id="media-open" target="_blank" rel="noopener noreferrer" title="Ouvrir dans un onglet">↗</a>
+        <button type="button" id="media-close" class="icon" title="Fermer" aria-label="Fermer">✕</button>
+      </figcaption>
+    </figure>
 
     <div id="error" class="error" role="alert"></div>
 
@@ -69,6 +80,10 @@
           <input name="appId" placeholder="id de l’application, pour la voix Breign" />
           <small>Sans application, la voix du navigateur est utilisée.</small>
         </label>
+        <label>Instance de l’application — optionnel
+          <input name="instanceId" placeholder="id de l’instance (vide : instance par défaut)" />
+          <small>Avec une application, l’avatar répond par sa web socket (voix, images, actions de Breign). Une instance par appareil : un autre onglet sur la même instance la déconnecte. <span id="socket-status"></span></small>
+        </label>
         <label>Langue
           <select name="lang"><option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="es">Español</option><option value="it">Italiano</option></select>
         </label>
@@ -85,6 +100,17 @@
           <label class="swatch" style="--c: #1fe08a"><input type="radio" name="orbColor" value="green" /><span></span>Vert</label>
           <label class="swatch" style="--c: #9b5cff"><input type="radio" name="orbColor" value="violet" /><span></span>Violet</label>
         </fieldset>
+        <div class="action-box">
+          <span class="account-label">Codes d’action</span>
+          <small>L’agent peut piloter l’apparence en glissant des codes comme <code>[ACTION.EMOTION.AGGRESSIVE]</code> dans ses réponses. Essayez-les ici, puis copiez les consignes dans le prompt de l’agent.</small>
+          <div class="row">
+            <input id="action-test" list="action-codes" autocomplete="off" placeholder="[ACTION.SHAPE.HEART] [ACTION.FX.PULSE:3]" />
+            <button type="button" id="action-run">Jouer</button>
+            <button type="button" id="action-reset" title="Annule les codes en cours">↺</button>
+          </div>
+          <datalist id="action-codes"></datalist>
+          <button type="button" id="action-copy">Copier les consignes pour l’agent</button>
+        </div>
         <label class="only-human">Modèle 3D (GLB)
           <input name="modelUrl" placeholder="/models/human.glb" />
           <small>Tout GLB avec blendshapes ARKit ou visèmes Oculus (Avaturn, CC4, MetaHuman…).</small>

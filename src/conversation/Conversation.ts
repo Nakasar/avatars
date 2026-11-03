@@ -2,7 +2,11 @@ import type { Expression } from '../avatar/Avatar';
 import type { Character } from '../avatar/Character';
 import { SentenceChunker, type Voice } from '../avatar/Voice';
 import { describeError, type BreignService } from '../breign/BreignService';
+import type { NativeAction } from '../breign/nativeActions';
+import { safeStreamingText, stripActions } from '../actions/parse';
 import { toWav16k, VoiceActivity, type Utterance } from './VoiceActivity';
+import { AppReplies } from './AppReplies';
+import type { AppMessage } from '../breign/AppSocket';
 
 export type ConversationState = 'off' | 'idle' | 'user-speaking' | 'transcribing' | 'thinking' | 'speaking';
 
@@ -13,6 +17,14 @@ export interface ConversationEvents {
   onAgentText?: (text: string, done: boolean) => void;
   onError?: (message: string) => void;
   onLevel?: (level: number) => void;
+  /** Actions natives de la réponse (montrer une image, ouvrir une page…), à sa fin. */
+  onNativeActions?: (actions: NativeAction[]) => void;
+  /** Une nouvelle réponse commence à être dite. */
+  onReplyStart?: () => void;
+  /** `DO_ACTION` de l'application, au moment de sa phrase. */
+  onAppAction?: (action: NonNullable<AppMessage['action']>) => void;
+  /** Relances proposées en fin de réponse (`SHOW_SUGGESTIONS`). */
+  onSuggestions?: (s: NonNullable<AppMessage['suggestions']>) => void;
 }
 
 /**
@@ -36,6 +48,14 @@ export class Conversation {
   /** Ce que l'utilisateur a dit depuis la dernière réponse prononcée (tour « ouvert »). */
   private openUserText = '';
   private avatarStartedSpeaking = false;
+  /** Réponses de l'application, reçues sur sa web socket. */
+  readonly replies: AppReplies;
+  /**
+   * Mode application : la question part par `POST /apps/{appId}/chats` et la réponse (voix
+   * déjà synthétisée, images, actions) arrive sur la web socket. Sinon, mode agent : la
+   * réponse est suivie par l'API des prompts et synthétisée phrase par phrase.
+   */
+  appMode = false;
 
   constructor(
     private voice: Voice,
@@ -54,8 +74,46 @@ export class Conversation {
     voice.onSpeakingChange = (speaking) => {
       this.vad.avatarSpeaking = speaking;
       if (speaking) this.setState('speaking');
-      else if (this.state === 'speaking') this.setState('idle');
+      // Entre deux phrases d'une réponse en streaming, l'avatar reste « en train de parler ».
+      else if (this.state === 'speaking' && !(this.appMode && this.replies.active)) this.setState('idle');
     };
+    this.replies = new AppReplies(voice, {
+      onTurnStart: () => this.replyStarted(),
+      onText: (text, done) => this.events.onAgentText?.(stripActions(text), done),
+      onTurnEnd: () => {
+        void this.getBreign().setAppIdle().catch(() => undefined);
+        if (!this.voice.speaking) {
+          this.setState('idle');
+          this.getAvatar()?.setMode('idle');
+        }
+      },
+      onAction: (a) => this.events.onAppAction?.(a),
+      onImage: (img) =>
+        this.events.onNativeActions?.([{ code: 'SHOW_IMAGE', kind: 'image', url: img.src, title: img.title, raw: img }]),
+      onSuggestions: (list) => this.events.onSuggestions?.(list),
+      onInput: (text) => {
+        this.events.onUserText?.(text);
+        this.setState('thinking');
+        this.getAvatar()?.setMode('thinking');
+      },
+      onInterrupt: () => this.setState('idle'),
+    });
+  }
+
+  /** Message reçu sur la web socket de l'application. */
+  onAppMessage(m: AppMessage) {
+    this.replies.handle(m);
+  }
+
+  /** Début d'une réponse : l'avatar passe en mode parole, les effets précédents s'arrêtent. */
+  private replyStarted(mood?: Expression) {
+    this.avatarStartedSpeaking = true;
+    this.openUserText = ''; // le tour de l'utilisateur est clos : l'avatar répond
+    const avatar = this.getAvatar();
+    avatar?.resetActions?.();
+    this.events.onReplyStart?.();
+    avatar?.setMode('speaking');
+    avatar?.setExpression(mood ?? 'neutral', 0.6);
   }
 
   get current() {
@@ -80,6 +138,11 @@ export class Conversation {
     this.turn++;
     this.abort?.abort();
     this.voice.stop();
+    if (this.replies.active) {
+      // On se tait tout de suite, sans attendre l'aller-retour ; Breign est prévenu ensuite.
+      this.replies.silence();
+      if (this.appMode) void this.getBreign().interruptApp().catch(() => undefined);
+    }
   }
 
   /** Message tapé au clavier : même parcours qu'un message dit à voix haute. */
@@ -155,17 +218,13 @@ export class Conversation {
     avatar?.setMode('thinking');
     avatar?.setExpression('thinking', 0.5);
     this.avatarStartedSpeaking = false;
+    if (this.appMode) return this.respondByApp(text, turn);
     const chunker = new SentenceChunker();
     const abort = (this.abort = new AbortController());
 
     const speak = (sentences: string[], full: string) => {
       for (const s of sentences) {
-        if (!this.avatarStartedSpeaking) {
-          this.avatarStartedSpeaking = true;
-          this.openUserText = ''; // le tour de l'utilisateur est clos : l'avatar répond
-          avatar?.setMode('speaking');
-          avatar?.setExpression(moodOf(full), 0.6);
-        }
+        if (!this.avatarStartedSpeaking) this.replyStarted(moodOf(stripActions(full)));
         this.voice.say(s);
       }
     };
@@ -175,13 +234,17 @@ export class Conversation {
         text,
         ({ text: partial, done }) => {
           if (turn !== this.turn) return;
-          this.events.onAgentText?.(partial, done);
-          speak(chunker.push(partial, done), partial);
+          // Les codes d'action ne s'affichent pas ; la voix les déclenche en les lisant.
+          this.events.onAgentText?.(stripActions(partial, done), done);
+          speak(chunker.push(done ? partial : safeStreamingText(partial), done), partial);
         },
         abort.signal,
+        (actions) => {
+          if (turn === this.turn && actions.length) this.events.onNativeActions?.(actions);
+        },
       );
       if (turn !== this.turn) return;
-      this.events.onAgentText?.(final, true);
+      this.events.onAgentText?.(stripActions(final), true);
       speak(chunker.push(final, true), final);
       if (!this.voice.speaking) {
         this.setState('idle');
@@ -189,6 +252,20 @@ export class Conversation {
       }
     } catch (e) {
       if (turn !== this.turn || (e as Error).name === 'AbortError') return;
+      this.fail(e);
+    }
+  }
+
+  /** Mode application : la réponse arrivera sur la web socket (voir `AppReplies`). */
+  private async respondByApp(text: string, turn: number) {
+    this.replies.begin();
+    try {
+      const messageId = await this.getBreign().askApp(text);
+      if (turn !== this.turn) return;
+      this.replies.expect(messageId);
+    } catch (e) {
+      if (turn !== this.turn) return;
+      this.replies.silence();
       this.fail(e);
     }
   }
