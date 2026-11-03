@@ -72,6 +72,25 @@ autour d'un cœur lumineux. Elle flotte, respire et réagit à la conversation :
 Les expressions se traduisent aussi : joie (plus vive, rebond), surprise (sursaut), tristesse
 (plus terne, plus lente). Tout est procédural (`src/orb/Orb.ts`), sans fichier à charger.
 
+### Codes d'action : l'agent pilote l'orbe
+
+L'agent peut glisser des codes dans ses réponses pour changer l'émotion, la couleur ou la
+forme de l'orbe, ou déclencher un effet précis :
+
+```
+[[ACTION.EMOTION.AGGRESSIVE]] Recule. [[ACTION.FX.PULSE]] Tout de suite.
+[[ACTION.SHAPE.TRIANGLE]] Trois options. [[ACTION.SHAPE.SQUARE]] Quatre côtés.
+[[ACTION.COLOR.HEX:FF3300]] [[ACTION.FX.BLINK:3]] [[ACTION.SIZE.LARGE]] [[ACTION.RESET]]
+```
+
+Les codes sont retirés des sous-titres et de la voix, et se déclenchent au moment où la voix
+arrive à leur place. Émotions (neutre, joie, tristesse, colère, peur, calme, curiosité,
+surprise, perplexité, fierté, tendresse), couleurs, formes (sphère, triangle, carré, cœur,
+anneaux, nœud), effets (pulsation, clignement, éclair, tremblement, tourbillon, grésillement,
+hochement) et taille. La liste complète et les consignes à coller dans le prompt de l'agent
+sont dans [docs/codes-action.md](docs/codes-action.md) ; les réglages permettent de tester un
+code et de copier ces consignes.
+
 ## Conversation vocale
 
 Un premier geste (« Commencer la conversation ») autorise le micro et le son, puis plus aucun
@@ -106,6 +125,9 @@ src/
                            MSAA, GTAO, bloom léger, finition photo (vignettage, grain)
   avatar/Character.ts      interface commune aux apparences (humain, orbe)
   orb/Orb.ts               orbe IA : particules et shaders, formes, réactions aux états
+  orb/moods.ts             humeurs, couleurs, formes et tailles des codes d'action
+  actions/vocabulary.ts    vocabulaire des codes d'action (source de docs/codes-action.md)
+  actions/parse.ts         repérage et retrait des codes dans le texte, même en streaming
   avatar/Avatar.ts         chargement GLB (KTX2, meshopt, Draco), mise en pose, blendshapes,
                            clignements, saccades, respiration, mouvements de tête, expressions
   avatar/materials.ts      matériaux physiques : peau (diffusion sous-cutanée approchée, sheen),

@@ -2,6 +2,7 @@ import type { Expression } from '../avatar/Avatar';
 import type { Character } from '../avatar/Character';
 import { SentenceChunker, type Voice } from '../avatar/Voice';
 import { describeError, type BreignService } from '../breign/BreignService';
+import { safeStreamingText, stripActions } from '../actions/parse';
 import { toWav16k, VoiceActivity, type Utterance } from './VoiceActivity';
 
 export type ConversationState = 'off' | 'idle' | 'user-speaking' | 'transcribing' | 'thinking' | 'speaking';
@@ -163,8 +164,9 @@ export class Conversation {
         if (!this.avatarStartedSpeaking) {
           this.avatarStartedSpeaking = true;
           this.openUserText = ''; // le tour de l'utilisateur est clos : l'avatar répond
+          avatar?.resetActions?.(); // les effets de la réponse précédente s'arrêtent
           avatar?.setMode('speaking');
-          avatar?.setExpression(moodOf(full), 0.6);
+          avatar?.setExpression(moodOf(stripActions(full)), 0.6);
         }
         this.voice.say(s);
       }
@@ -175,13 +177,14 @@ export class Conversation {
         text,
         ({ text: partial, done }) => {
           if (turn !== this.turn) return;
-          this.events.onAgentText?.(partial, done);
-          speak(chunker.push(partial, done), partial);
+          // Les codes d'action ne s'affichent pas ; la voix les déclenche en les lisant.
+          this.events.onAgentText?.(stripActions(partial, done), done);
+          speak(chunker.push(done ? partial : safeStreamingText(partial), done), partial);
         },
         abort.signal,
       );
       if (turn !== this.turn) return;
-      this.events.onAgentText?.(final, true);
+      this.events.onAgentText?.(stripActions(final), true);
       speak(chunker.push(final, true), final);
       if (!this.voice.speaking) {
         this.setState('idle');

@@ -85,6 +85,17 @@
           <label class="swatch" style="--c: #1fe08a"><input type="radio" name="orbColor" value="green" /><span></span>Vert</label>
           <label class="swatch" style="--c: #9b5cff"><input type="radio" name="orbColor" value="violet" /><span></span>Violet</label>
         </fieldset>
+        <div class="action-box">
+          <span class="account-label">Codes d’action</span>
+          <small>L’agent peut piloter l’apparence en glissant des codes comme <code>[[ACTION.EMOTION.AGGRESSIVE]]</code> dans ses réponses. Essayez-les ici, puis copiez les consignes dans le prompt de l’agent.</small>
+          <div class="row">
+            <input id="action-test" list="action-codes" autocomplete="off" placeholder="[[ACTION.SHAPE.HEART]] [[ACTION.FX.PULSE:3]]" />
+            <button type="button" id="action-run">Jouer</button>
+            <button type="button" id="action-reset" title="Annule les codes en cours">↺</button>
+          </div>
+          <datalist id="action-codes"></datalist>
+          <button type="button" id="action-copy">Copier les consignes pour l’agent</button>
+        </div>
         <label class="only-human">Modèle 3D (GLB)
           <input name="modelUrl" placeholder="/models/human.glb" />
           <small>Tout GLB avec blendshapes ARKit ou visèmes Oculus (Avaturn, CC4, MetaHuman…).</small>

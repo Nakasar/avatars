@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { Expression, Mode } from './Avatar';
 import type { VisemeFrame } from './lipsync';
+import type { ActionCode } from '../actions/vocabulary';
 
 /** Apparences proposées pour le bot. */
 export type Appearance = 'human' | 'orb';
@@ -27,5 +28,12 @@ export interface Character {
   setUserLevel(level: number): void;
   lookAt(world: THREE.Vector3): void;
   update(dt: number, t: number): void;
+  /**
+   * Applique un code d'action envoyé par l'agent (`[[ACTION.EMOTION.AGGRESSIVE]]`…).
+   * Renvoie `false` si l'apparence ne sait pas le jouer.
+   */
+  applyAction?(code: ActionCode): boolean;
+  /** Annule les effets des codes d'action en cours (début d'une nouvelle réponse). */
+  resetActions?(): void;
   dispose?(): void;
 }

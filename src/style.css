@@ -133,3 +133,8 @@ dialog label.swatch {
   .caption { font-size: 14px; }
 }
 body[data-state='off'] .presence { opacity: 0; }
+
+/* Codes d'action : essai et consignes pour l'agent */
+.action-box { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+.action-box .row input { flex: 1; min-width: 0; }
+.action-box #action-copy { align-self: flex-start; }

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { Character } from '../avatar/Character';
 import type { Expression, Mode } from '../avatar/Avatar';
 import type { VisemeFrame } from '../avatar/lipsync';
+import type { ActionCode } from '../actions/vocabulary';
+import { blendMood, COLORS, MOODS, NEUTRAL, SHAPE_FACING, SHAPE_INDEX, SIZES, type Mood, type Palette } from './moods';
 
 export type OrbColor = 'blue' | 'orange' | 'green' | 'violet';
 
@@ -19,8 +21,13 @@ export function isOrbColor(v: unknown): v is OrbColor {
 
 /** Rayon de la sphère, en mètres de scène. */
 const R = 0.5;
-/** Formes que prend l'orbe en se reconfigurant : 0 sphère, 1 gyroscope, 2 cube, 3 nœud. */
-const SHAPES = 4;
+/**
+ * Formes de l'orbe : 0 sphère, 1 gyroscope, 2 cube, 3 nœud, 4 pyramide, 5 cœur.
+ * Au repos et en réfléchissant, elle n'utilise d'elle-même que les quatre premières ; les
+ * autres viennent des codes d'action (`[[ACTION.SHAPE.TRIANGLE]]`…).
+ */
+const AUTO_SHAPES = 4;
+const MORPHS = 5;
 
 /**
  * Orbe IA « mascotte » : une sphère holographique de données faite de particules,
@@ -32,6 +39,10 @@ const SHAPES = 4;
  *  - quand elle réfléchit, ses anneaux et ses données s'allument, elle tourbillonne et
  *    change de forme en boucle (gyroscope, cube, nœud) ;
  *  - quand elle parle, son cœur et sa surface pulsent avec l'énergie de sa voix.
+ *
+ * L'agent peut aussi la piloter par des codes d'action glissés dans ses réponses
+ * (`[[ACTION.EMOTION.AGGRESSIVE]]`, `[[ACTION.SHAPE.HEART]]`, `[[ACTION.FX.BLINK]]`…) :
+ * voir `applyAction` et src/actions/vocabulary.ts.
  */
 export class Orb implements Character {
   readonly root = new THREE.Group();
@@ -62,7 +73,10 @@ export class Orb implements Character {
     uPulse: { value: 0 },
     uBreath: { value: 0 },
     uIntensity: { value: 1 },
-    uMorph: { value: new THREE.Vector3() },
+    uMorph: { value: new Array<number>(MORPHS).fill(0) },
+    uSpikes: { value: 0 },
+    uWobble: { value: 0 },
+    uGlitch: { value: 0 },
     uLattice: { value: 1 },
     uShards: { value: 1 },
     uSparks: { value: 1 },
@@ -82,7 +96,30 @@ export class Orb implements Character {
   private speechEnergy = 0;
   private openness = 0;
   private shape = { current: 0, next: 4 + Math.random() * 4, hold: 0 };
-  private morph = new THREE.Vector3();
+  private morph = new Array<number>(MORPHS).fill(0);
+  private breathPhase = 0;
+  private clock = 0;
+
+  // Codes d'action : humeur, couleur imposée, forme tenue, taille et effets ponctuels.
+  private base: Palette = { ...ORB_PALETTES.blue };
+  private moodTarget: Mood = NEUTRAL;
+  private moodPalette?: Palette;
+  private moodK = 0;
+  private mc: Mood = { ...NEUTRAL };
+  private colorOverride?: Palette;
+  private shapeLock?: { shape: number; until: number };
+  private size = { target: 1, current: 1 };
+  private present = 0;
+  private beat = { next: 0, echo: -1 };
+  private fx = {
+    pulseUntil: -1, nextPulse: 0,
+    blinkStart: -1, blinkUntil: -1,
+    flash: 0,
+    shakeUntil: -1,
+    spinUntil: -1, spinBoost: 0,
+    glitchUntil: -1, glitch: 0, nextGlitch: 0,
+  };
+  private jitter = new THREE.Vector3();
 
   constructor(color: OrbColor = 'blue') {
     this.setColor(color, true);
@@ -120,10 +157,8 @@ export class Orb implements Character {
 
   // ------------------------------------------------------------------ API Character
   setColor(name: OrbColor, immediate = false) {
-    const p = ORB_PALETTES[name] ?? ORB_PALETTES.blue;
-    this.target.main.setHex(p.main);
-    this.target.accent.setHex(p.accent);
-    this.target.core.setHex(p.core);
+    this.base = { ...(ORB_PALETTES[name] ?? ORB_PALETTES.blue) };
+    this.refreshColor();
     if (immediate) {
       this.u.uColor.value.copy(this.target.main);
       this.u.uAccent.value.copy(this.target.accent);
@@ -154,8 +189,8 @@ export class Orb implements Character {
 
   setMode(mode: Mode) {
     if (mode === this.mode) return;
-    if (mode === 'thinking') this.shape.next = 0.4; // se reconfigure aussitôt
-    if (mode === 'speaking' || mode === 'listening') {
+    if (mode === 'thinking' && !this.shapeLock) this.shape.next = 0.4; // se reconfigure aussitôt
+    if ((mode === 'speaking' || mode === 'listening') && !this.shapeLock) {
       this.shape.current = 0; // reprend sa forme de sphère pour parler ou écouter
       this.shape.next = 6 + Math.random() * 6;
     }
@@ -176,15 +211,138 @@ export class Orb implements Character {
     this.userLevel = THREE.MathUtils.clamp(level, 0, 1);
   }
 
+  // ------------------------------------------------------------------ Codes d'action
+  /** Joue un code d'action de l'agent (voir src/actions/vocabulary.ts). */
+  applyAction(code: ActionCode): boolean {
+    const num = (fallback: number) => {
+      const n = parseFloat(code.param ?? '');
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    };
+    const now = this.clock;
+    switch (code.category) {
+      case 'EMOTION': {
+        const m = MOODS[code.value];
+        if (!m) return false;
+        this.moodK = THREE.MathUtils.clamp(num(1), 0, 1);
+        this.moodTarget = code.value === 'NEUTRAL' ? NEUTRAL : blendMood(this.moodK, m);
+        this.moodPalette = m.palette;
+        this.pulse.v += this.moodTarget.kick * 4;
+        this.refreshColor();
+        return true;
+      }
+      case 'COLOR': {
+        if (code.value === 'DEFAULT') this.colorOverride = undefined;
+        else {
+          const hex = code.value === 'HEX' ? parseHex(code.param) : COLORS[code.value];
+          if (hex === undefined) return false;
+          this.colorOverride = paletteFrom(hex);
+        }
+        this.refreshColor();
+        return true;
+      }
+      case 'SHAPE': {
+        const shape = SHAPE_INDEX[code.value];
+        if (shape === undefined) return false;
+        const d = num(0);
+        this.shapeLock = shape === 0 && !d ? undefined : { shape, until: d > 0 ? now + d : Infinity };
+        this.shape.current = shape;
+        this.shape.next = 8 + Math.random() * 6;
+        return true;
+      }
+      case 'SIZE':
+        this.size.target = SIZES[code.value] ?? 1;
+        return true;
+      case 'FX':
+        return this.startFx(code.value, num(0), now);
+      case 'RESET':
+        this.resetActions();
+        return true;
+    }
+    return false;
+  }
+
+  /** Annule humeur, couleur, forme, taille et effets venus des codes d'action. */
+  resetActions() {
+    this.moodTarget = NEUTRAL;
+    this.moodPalette = undefined;
+    this.moodK = 0;
+    this.colorOverride = undefined;
+    if (this.shapeLock) {
+      this.shapeLock = undefined;
+      this.shape.current = 0;
+      this.shape.next = 6 + Math.random() * 6;
+    }
+    this.size.target = 1;
+    const fx = this.fx;
+    fx.pulseUntil = fx.blinkUntil = fx.shakeUntil = fx.spinUntil = fx.glitchUntil = -1;
+    this.refreshColor();
+  }
+
+  private startFx(name: string, duration: number, now: number): boolean {
+    const fx = this.fx;
+    switch (name) {
+      case 'PULSE':
+        this.pulse.v += 1.4;
+        fx.pulseUntil = duration ? now + duration : -1;
+        fx.nextPulse = now + 0.55;
+        return true;
+      case 'BLINK':
+        fx.blinkStart = now;
+        fx.blinkUntil = now + (duration || 0.62);
+        return true;
+      case 'FLASH':
+        fx.flash = 1;
+        this.pulse.v += 0.6;
+        return true;
+      case 'SHAKE':
+        fx.shakeUntil = now + (duration || 0.8);
+        return true;
+      case 'SPIN':
+        fx.spinUntil = now + (duration || 1.2);
+        return true;
+      case 'GLITCH':
+        fx.glitchUntil = now + (duration || 0.9);
+        return true;
+      case 'NOD':
+        this.nod();
+        return true;
+    }
+    return false;
+  }
+
+  /** Couleur effective : imposée par un code, sinon celle de l'humeur, sinon celle des réglages. */
+  private refreshColor() {
+    const t = this.target;
+    t.main.setHex(this.base.main);
+    t.accent.setHex(this.base.accent);
+    t.core.setHex(this.base.core);
+    const over = this.colorOverride ?? this.moodPalette;
+    if (!over) return;
+    const k = this.colorOverride ? 1 : this.moodK;
+    t.main.lerp(new THREE.Color(over.main), k);
+    t.accent.lerp(new THREE.Color(over.accent), k);
+    t.core.lerp(new THREE.Color(over.core), k);
+  }
+
   lookAt(_world: THREE.Vector3) {
     // L'orbe est symétrique : elle n'a pas besoin de regarder la caméra.
   }
 
   update(dt: number, t: number) {
     this.modeTime += dt;
+    this.clock += dt;
+    const now = this.clock;
     const damp = (cur: number, to: number, rate: number) => THREE.MathUtils.damp(cur, to, rate, dt);
     const f = this.f;
     const m = this.mode;
+
+    // Humeur : chaque réglage glisse vers celui de l'émotion demandée.
+    const mc = this.mc;
+    for (const key of Object.keys(NEUTRAL) as Array<keyof Mood>) {
+      if (key === 'palette') continue;
+      (mc[key] as number) = damp(mc[key] as number, this.moodTarget[key] as number, 3);
+    }
+    const fx = this.updateFx(dt, now);
 
     f.listen = damp(f.listen, m === 'listening' ? 1 : 0, 4);
     f.think = damp(f.think, m === 'thinking' ? 1 : 0, 3);
@@ -192,9 +350,9 @@ export class Orb implements Character {
     const voice = Math.min(1, this.speechEnergy * 1.2 + this.openness * 0.3) * (m === 'speaking' ? 1 : 0.3);
     f.energy = damp(f.energy, voice, voice > f.energy ? 22 : 9);
     f.user = damp(f.user, this.userLevel, this.userLevel > f.user ? 18 : 6);
-    f.bright = damp(f.bright, this.expr.bright, 2);
-    f.spin = damp(f.spin, this.expr.spin, 1.5);
-    f.rings = damp(f.rings, 0.22 + f.think * 0.75 + f.speak * 0.15 + f.user * 0.3, 3);
+    f.bright = damp(f.bright, this.expr.bright * mc.bright, 2);
+    f.spin = damp(f.spin, this.expr.spin * mc.spin, 1.5);
+    f.rings = damp(f.rings, Math.min(1, 0.22 + f.think * 0.75 + f.speak * 0.15 + f.user * 0.3 + mc.rings), 3);
     f.glyphs = damp(f.glyphs, 0.12 + f.think * 0.7 + f.energy * 0.25, 3);
 
     // Ressort : pulsations (acquiescement, surprise, début de parole).
@@ -202,8 +360,22 @@ export class Orb implements Character {
     this.pulse.v += (-k * this.pulse.x - c * this.pulse.v) * dt;
     this.pulse.x += this.pulse.v * dt;
 
-    // Respiration : lente au repos, plus vive à l'écoute.
-    const breath = Math.sin(t * (1.1 + f.listen * 0.9)) * (0.018 + f.listen * 0.01);
+    // Battement de cœur de l'humeur (colère, tendresse) : « poum-poum ».
+    if (mc.beat > 0.05 && this.moodTarget.beat > 0) {
+      if (now >= this.beat.next) {
+        this.pulse.v += mc.beatForce;
+        this.beat.echo = now + 0.17;
+        this.beat.next = now + mc.beat;
+      }
+      if (this.beat.echo > 0 && now >= this.beat.echo) {
+        this.pulse.v += mc.beatForce * 0.55;
+        this.beat.echo = -1;
+      }
+    }
+
+    // Respiration : lente au repos, plus vive à l'écoute ; son rythme dépend de l'humeur.
+    this.breathPhase += dt * (1.1 + f.listen * 0.9) * mc.breath;
+    const breath = Math.sin(this.breathPhase) * (0.018 + f.listen * 0.01) * mc.breathAmp;
 
     // Couleur (transition douce quand on la change).
     const ct = 1 - Math.exp(-dt * 4);
@@ -213,32 +385,60 @@ export class Orb implements Character {
 
     // Reconfiguration : change de forme en réfléchissant, et parfois au repos.
     this.updateShape(dt);
-    const mx = Math.max(this.morph.x, this.morph.y, this.morph.z);
+    const mx = Math.max(...this.morph);
 
     const u = this.u;
     u.uTime.value = t;
-    u.uFlow.value += dt * (0.25 + f.energy * 1.4 + f.think * 0.5 + f.user * 0.4);
+    u.uFlow.value += dt * (0.25 + f.energy * 1.4 + f.think * 0.5 + f.user * 0.4) * mc.flow;
     u.uEnergy.value = f.energy;
     u.uUser.value = f.user * f.listen;
     u.uThink.value = f.think;
     u.uListen.value = f.listen;
     u.uPulse.value = this.pulse.x;
     u.uBreath.value = breath;
-    u.uIntensity.value = f.bright * (0.95 + f.energy * 0.6 + f.user * 0.3);
-    u.uMorph.value.copy(this.morph);
+    // Vacillement (peur) : la lumière tremble par à-coups.
+    const flicker = 1 - mc.flicker * 0.45 * Math.max(0, Math.sin(t * 17.3) * Math.sin(t * 6.1 + 1.3));
+    u.uIntensity.value = f.bright * (0.95 + f.energy * 0.6 + f.user * 0.3) * flicker * fx.light;
+    for (let i = 0; i < MORPHS; i++) u.uMorph.value[i] = this.morph[i];
     u.uLattice.value = 1 - mx;
     u.uShards.value = 0.8 + f.think * 0.4 + f.energy * 0.5;
-    u.uSparks.value = 0.5 + f.energy * 1.2 + f.think * 0.6;
+    u.uSparks.value = (0.5 + f.energy * 1.2 + f.think * 0.6) * mc.sparks;
+    u.uSpikes.value = mc.spikes;
+    u.uWobble.value = mc.wobble;
+    u.uGlitch.value = fx.glitch;
 
-    // Mouvements d'ensemble : flottement, dérive et rotation.
-    this.root.position.set(Math.sin(t * 0.37) * 0.025, Math.sin(t * 0.8) * 0.03 - (f.bright < 0.9 ? 0.03 : 0), 0);
-    const spin = (0.14 + f.think * 0.9 + f.energy * 0.35) * f.spin;
-    this.shell.rotation.y += dt * spin;
-    this.shell.rotation.x = Math.sin(t * 0.21) * 0.25 + f.think * Math.sin(t * 0.9) * 0.2;
-    this.shell.rotation.z = Math.cos(t * 0.17) * 0.12;
+    // Mouvements d'ensemble : flottement, dérive, tremblement et rotation.
+    const shake = Math.min(1, mc.jitter + fx.shake);
+    if (shake > 0.01) {
+      this.jitter.set(Math.sin(t * 61.3) * Math.sin(t * 23.1), Math.sin(t * 53.7 + 1.1) * Math.sin(t * 19.3), 0)
+        .multiplyScalar(R * 0.05 * shake);
+    } else this.jitter.set(0, 0, 0);
+    const bob = mc.bob * Math.abs(Math.sin(t * 3.2)) * R * 0.09;
+    this.root.position.set(
+      Math.sin(t * 0.37) * 0.025,
+      Math.sin(t * 0.8) * 0.03 - (f.bright < 0.9 ? 0.03 : 0) + mc.lift * R * 2 + bob,
+      0,
+    ).add(this.jitter);
+    if (fx.glitch > 0.5) this.root.position.x += (Math.random() - 0.5) * R * 0.08;
+    this.size.current = damp(this.size.current, this.size.target, 3);
+    this.root.scale.setScalar(this.size.current * mc.scale);
+
+    // Une forme imposée se tourne face à la caméra pour bien se montrer.
+    const facing = this.shapeLock ? SHAPE_FACING[this.shapeLock.shape] ?? 0 : 0;
+    this.present = damp(this.present, facing && fx.spin < 0.1 ? 1 : 0, 2.5);
+    const spin = (0.14 + f.think * 0.9 + f.energy * 0.35) * f.spin + fx.spin * 9;
+    const sh = this.shell.rotation;
+    if (facing && this.present > 0.02) {
+      const goal = Math.round(sh.y / facing) * facing;
+      sh.y += dt * spin * (1 - this.present);
+      sh.y = THREE.MathUtils.damp(sh.y, goal, 3 * this.present, dt);
+    } else sh.y += dt * spin;
+    const keep = 1 - this.present;
+    sh.x = (Math.sin(t * 0.21) * 0.25 + f.think * Math.sin(t * 0.9) * 0.2) * keep;
+    sh.z = Math.cos(t * 0.17) * 0.12 * keep + mc.wobble * Math.sin(t * 1.3) * 0.25;
 
     for (const r of this.rings) {
-      r.group.rotation.z += dt * r.spin * (0.4 + f.think * 2.2 + f.energy) * f.spin;
+      r.group.rotation.z += dt * r.spin * (0.4 + f.think * 2.2 + f.energy + fx.spin * 6) * f.spin;
       r.mat.uniforms.uRings.value = f.rings;
     }
 
@@ -250,15 +450,48 @@ export class Orb implements Character {
     }
 
     // Cœur : bat avec la voix, scintille en réfléchissant, s'avive quand on lui parle.
-    const flicker = 1 + f.think * 0.25 * Math.sin(t * 23) * Math.sin(t * 7.3);
-    const coreGain = u.uIntensity.value * flicker * (1 + f.energy * 1.6 + f.user * 0.8);
+    const thinkFlicker = 1 + f.think * 0.25 * Math.sin(t * 23) * Math.sin(t * 7.3);
+    const coreGain = u.uIntensity.value * thinkFlicker * (1 + f.energy * 1.6 + f.user * 0.8 + fx.flash * 2);
     const s = 1 + this.pulse.x + breath;
     this.core.scale.setScalar(R * (0.95 + f.energy * 0.55 + f.user * 0.3) * s);
     this.core.material.color.copy(u.uColor.value).lerp(u.uCore.value, 0.2).multiplyScalar(1.1 * coreGain);
     this.hot.scale.setScalar(R * (0.32 + f.energy * 0.35) * s);
     this.hot.material.color.copy(u.uCore.value).multiplyScalar(2.2 * coreGain);
     this.halo.scale.setScalar(R * 5.5 * (1 + f.energy * 0.15));
-    this.halo.material.color.copy(u.uColor.value).multiplyScalar(0.5 * f.bright);
+    this.halo.material.color.copy(u.uColor.value).multiplyScalar(0.5 * f.bright * fx.light);
+  }
+
+  /** Avance les effets ponctuels ; renvoie leurs valeurs pour l'image courante. */
+  private updateFx(dt: number, now: number) {
+    const fx = this.fx;
+    if (fx.pulseUntil > now && now >= fx.nextPulse) {
+      this.pulse.v += 1.2;
+      fx.nextPulse = now + 0.55;
+    }
+    // Clignement : éteinte 0,12 s, rallumée 0,19 s, et ainsi de suite.
+    let light = 1;
+    if (now < fx.blinkUntil) {
+      const phase = ((now - fx.blinkStart) % 0.31) / 0.31;
+      light = phase < 0.4 ? 0.06 : 1;
+    }
+    fx.flash = Math.max(0, fx.flash - dt * 3.5);
+    light *= 1 + fx.flash * 1.8;
+    fx.spinBoost = THREE.MathUtils.damp(fx.spinBoost, now < fx.spinUntil ? 1 : 0, now < fx.spinUntil ? 6 : 2.5, dt);
+    // Grésillement : décrochages brefs, aléatoires (code GLITCH ou humeur perplexe).
+    const rate = (now < fx.glitchUntil ? 9 : 0) + this.mc.glitch;
+    if (rate > 0 && now >= fx.nextGlitch) {
+      fx.glitch = 1;
+      fx.nextGlitch = now + 0.06 + (-Math.log(1 - Math.random()) / rate);
+    }
+    fx.glitch = Math.max(0, fx.glitch - dt * 9);
+    if (fx.glitch > 0.5) light *= 0.55 + Math.random() * 0.6;
+    return {
+      light,
+      shake: now < fx.shakeUntil ? 1 : 0,
+      spin: fx.spinBoost,
+      glitch: fx.glitch,
+      flash: fx.flash,
+    };
   }
 
   dispose() {
@@ -277,15 +510,23 @@ export class Orb implements Character {
   // ------------------------------------------------------------------ Animation
   private updateShape(dt: number) {
     const s = this.shape;
-    s.next -= dt;
-    if (s.next <= 0) {
+    const lock = this.shapeLock;
+    if (lock && this.clock >= lock.until) {
+      // Durée écoulée : reprend sa sphère et ses reconfigurations habituelles.
+      this.shapeLock = undefined;
+      s.current = 0;
+      s.next = 6 + Math.random() * 6;
+    }
+    if (this.shapeLock) s.current = this.shapeLock.shape;
+    else s.next -= dt;
+    if (!this.shapeLock && s.next <= 0) {
       if (this.mode === 'thinking') {
         // En réfléchissant : enchaîne les formes, en repassant parfois par la sphère.
         const options = [1, 2, 3, 0].filter((x) => x !== s.current);
         s.current = options[Math.floor(Math.random() * (s.current === 0 ? 3 : 4))];
         s.next = 1.6 + Math.random() * 0.8;
       } else if (this.mode === 'idle' && s.current === 0) {
-        s.current = 1 + Math.floor(Math.random() * (SHAPES - 1));
+        s.current = 1 + Math.floor(Math.random() * (AUTO_SHAPES - 1));
         s.next = 2.5 + Math.random() * 1.5;
       } else {
         s.current = 0;
@@ -293,9 +534,8 @@ export class Orb implements Character {
       }
     }
     const step = dt / 1.1;
-    const goal = [s.current === 1 ? 1 : 0, s.current === 2 ? 1 : 0, s.current === 3 ? 1 : 0];
     const towards = (v: number, g: number) => (v < g ? Math.min(g, v + step) : Math.max(g, v - step));
-    this.morph.set(towards(this.morph.x, goal[0]), towards(this.morph.y, goal[1]), towards(this.morph.z, goal[2]));
+    for (let i = 0; i < MORPHS; i++) this.morph[i] = towards(this.morph[i], s.current === i + 1 ? 1 : 0);
   }
 
   private updateShards(dt: number) {
@@ -338,6 +578,8 @@ export class Orb implements Character {
     const gyro = new Float32Array(n * 3);
     const cube = new Float32Array(n * 3);
     const knot = new Float32Array(n * 3);
+    const tetra = new Float32Array(n * 3);
+    const heart = new Float32Array(n * 3);
     const rand = new Float32Array(n * 4);
     const v = new THREE.Vector3();
     const golden = Math.PI * (3 - Math.sqrt(5));
@@ -382,6 +624,9 @@ export class Orb implements Character {
       v.add(new THREE.Vector3().randomDirection().multiplyScalar(R * 0.07 * Math.random()));
       v.toArray(knot, i * 3);
 
+      tetraPoint(v, R * 1.05).toArray(tetra, i * 3);
+      heartPoint(v, R * 0.68).toArray(heart, i * 3);
+
       rand.set([Math.random(), Math.random(), Math.random(), Math.random()], i * 4);
     }
     const g = new THREE.BufferGeometry();
@@ -389,20 +634,24 @@ export class Orb implements Character {
     g.setAttribute('aShape1', new THREE.BufferAttribute(gyro, 3));
     g.setAttribute('aShape2', new THREE.BufferAttribute(cube, 3));
     g.setAttribute('aShape3', new THREE.BufferAttribute(knot, 3));
+    g.setAttribute('aShape4', new THREE.BufferAttribute(tetra, 3));
+    g.setAttribute('aShape5', new THREE.BufferAttribute(heart, 3));
     g.setAttribute('aRand', new THREE.BufferAttribute(rand, 4));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), R * 2);
     const mat = this.material(
       /* glsl */ `
-      attribute vec3 aShape1; attribute vec3 aShape2; attribute vec3 aShape3; attribute vec4 aRand;
-      uniform vec3 uMorph;
+      attribute vec3 aShape1; attribute vec3 aShape2; attribute vec3 aShape3;
+      attribute vec3 aShape4; attribute vec3 aShape5; attribute vec4 aRand;
+      uniform float uMorph[${MORPHS}];
       varying float vAlpha; varying float vHot;
       void main() {
         // Reconfiguration en vague, du haut vers le bas, chaque particule avec son retard.
         float st = clamp(position.y / uRadius * 0.5 + 0.5, 0.0, 1.0) * 0.35 + aRand.x * 0.25;
-        vec3 w = smoothstep(vec3(st), vec3(st + 0.4), uMorph);
-        vec3 p = mix(mix(mix(position, aShape1, w.x), aShape2, w.y), aShape3, w.z);
+        vec3 p = position;
         // Pendant la transition, les particules s'éparpillent puis se réassemblent.
-        float burst = dot(w * (1.0 - w), vec3(4.0));
+        float burst = 0.0;
+        float w;
+        ${[1, 2, 3, 4, 5].map((k) => `w = smoothstep(st, st + 0.4, uMorph[${k - 1}]); p = mix(p, aShape${k}, w); burst += w * (1.0 - w) * 4.0;`).join('\n        ')}
         vec3 dir = normalize(p + vec3(1e-4));
         p += dir * burst * uRadius * 0.35 * aRand.y;
         // Tourbillon pendant la réflexion.
@@ -636,6 +885,77 @@ export class Orb implements Character {
   }
 }
 
+/** Point d'une pyramide à base triangulaire (arêtes et grille des faces), une face vers +z. */
+function tetraPoint(out: THREE.Vector3, rho: number) {
+  // Face triangulaire vers la caméra, pointe en haut ; le dernier sommet part vers l'arrière.
+  const base = rho * Math.sqrt(8) / 3;
+  const V = [
+    new THREE.Vector3(0, 0, -rho),
+    new THREE.Vector3(0, base, rho / 3),
+    new THREE.Vector3(base * Math.sin((2 * Math.PI) / 3), base * Math.cos((2 * Math.PI) / 3), rho / 3),
+    new THREE.Vector3(-base * Math.sin((2 * Math.PI) / 3), base * Math.cos((2 * Math.PI) / 3), rho / 3),
+  ];
+  const faces = [[1, 2, 3], [0, 1, 2], [0, 2, 3], [0, 3, 1]];
+  const edges = [[1, 2], [2, 3], [3, 1], [0, 1], [0, 2], [0, 3]];
+  if (Math.random() < 0.55) {
+    // Sur une arête (plus dense : le contour se lit bien).
+    const [e0, e1] = edges[Math.floor(Math.random() * 6)];
+    out.lerpVectors(V[e0], V[e1], Math.random());
+    return out.add(new THREE.Vector3().randomDirection().multiplyScalar(rho * 0.015 * Math.random()));
+  }
+  // Face avant plus dense : c'est elle qui dessine le triangle.
+  const f = faces[Math.random() < 0.5 ? 0 : Math.floor(Math.random() * 4)];
+  let a = Math.random(), b = Math.random();
+  {
+    // Sur une ligne de la grille de la face.
+    if (a + b > 1) { a = 1 - a; b = 1 - b; }
+    a = Math.round(a * 4) / 4;
+  }
+  const c = 1 - a - b;
+  out.set(0, 0, 0)
+    .addScaledVector(V[f[0]], c)
+    .addScaledVector(V[f[1]], a)
+    .addScaledVector(V[f[2]], b);
+  return out.add(new THREE.Vector3().randomDirection().multiplyScalar(rho * 0.015 * Math.random()));
+}
+
+/** Point de la surface d'un cœur 3D (surface implicite de Taubin), pointe en bas, face vers +z. */
+function heartPoint(out: THREE.Vector3, size: number) {
+  // (x² + 9/4·y² + z² − 1)³ − x²·z³ − 9/80·y²·z³ = 0, z vers le haut, y en profondeur.
+  const F = (x: number, y: number, z: number) => {
+    const a = x * x + 2.25 * y * y + z * z - 1;
+    return a * a * a - x * x * z * z * z - 0.1125 * y * y * z * z * z;
+  };
+  const d = new THREE.Vector3().randomDirection();
+  let lo = 0, hi = 1.6;
+  for (let i = 0; i < 22; i++) {
+    const mid = (lo + hi) / 2;
+    if (F(d.x * mid, d.y * mid, d.z * mid) < 0) lo = mid;
+    else hi = mid;
+  }
+  const t = lo * (0.97 + Math.random() * 0.05);
+  return out.set(d.x * t, d.z * t - 0.1, d.y * t).multiplyScalar(size);
+}
+
+function parseHex(s?: string): number | undefined {
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec((s ?? '').trim());
+  if (!m) return undefined;
+  const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  return parseInt(h, 16);
+}
+
+/** Palette complète à partir d'une seule couleur : étincelles complémentaires, cœur pâle. */
+function paletteFrom(hex: number): Palette {
+  const named = Object.values(ORB_PALETTES).find((p) => p.main === hex);
+  if (named) return { ...named };
+  const main = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  main.getHSL(hsl);
+  const accent = new THREE.Color().setHSL((hsl.h + 0.12) % 1, Math.min(1, hsl.s + 0.1), Math.min(0.75, hsl.l + 0.15));
+  const core = main.clone().lerp(new THREE.Color(0xffffff), 0.8);
+  return { main: hex, accent: accent.getHex(), core: core.getHex() };
+}
+
 function glowTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
@@ -715,6 +1035,7 @@ float snoise(vec3 v){
 const DISPLACE = /* glsl */ `
 uniform float uTime; uniform float uFlow; uniform float uRadius; uniform float uEnergy; uniform float uUser;
 uniform float uThink; uniform float uListen; uniform float uPulse; uniform float uBreath; uniform float uScale;
+uniform float uSpikes; uniform float uWobble; uniform float uGlitch;
 vec3 orbDisplace(vec3 p) {
   float r = length(p);
   vec3 n = r > 1e-4 ? p / r : vec3(0.0, 1.0, 0.0);
@@ -722,7 +1043,21 @@ vec3 orbDisplace(vec3 p) {
   float fast = snoise(n * 4.0 + vec3(uFlow * 1.5));
   float d = slow * (0.035 + uThink * 0.04) + fast * (uEnergy * 0.11 + uUser * 0.07);
   float wave = sin(n.y * 9.0 - uFlow * 9.0) * uEnergy * 0.035;
+  // Colère : pointes acérées qui se déplacent (bruit « en crêtes »).
+  if (uSpikes > 0.001) {
+    float ridge = 1.0 - abs(snoise(n * 5.0 + vec3(uTime * 0.9, -uTime * 0.6, uTime * 0.4)));
+    d += pow(ridge, 6.0) * uSpikes * 0.32 - uSpikes * 0.02;
+  }
+  // Perplexité : ondulation de travers.
+  d += sin(n.x * 3.0 + uTime * 2.3) * cos(n.y * 2.0 - uTime * 1.7) * uWobble * 0.07;
   float scale = 1.0 + uPulse - uListen * 0.05 + uBreath + uEnergy * 0.05;
-  return p * scale + n * (d + wave) * uRadius;
+  vec3 q = p * scale + n * (d + wave) * uRadius;
+  // Décrochage holographique : tranches horizontales décalées.
+  if (uGlitch > 0.01) {
+    float band = floor(q.y / uRadius * 7.0 + floor(uTime * 20.0));
+    float h = fract(sin(band * 91.7) * 43758.5);
+    q.x += step(0.6, h) * (h - 0.8) * uGlitch * uRadius * 0.5;
+  }
+  return q;
 }
 `;

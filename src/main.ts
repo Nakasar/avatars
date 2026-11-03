@@ -8,6 +8,9 @@ import { BreignService, describeError, type BreignSettings } from './breign/Brei
 import { Conversation, type ConversationState } from './conversation/Conversation';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, revokeLogin, startLogin } from './breign/oauth';
+import { parseActions } from './actions/parse';
+import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
+import type { Expression } from './avatar/Avatar';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -71,6 +74,34 @@ stage.onUpdate((dt, t) => {
   avatar.lookAt(stage.camera.position);
   avatar.update(dt, t);
 });
+
+// ---------------------------------------------------------------- Codes d'action de l'agent
+/** Pour l'humain, qui n'a ni couleur ni forme : seules les émotions proches sont jouées. */
+const HUMAN_EXPRESSIONS: Record<string, [Expression, number]> = {
+  NEUTRAL: ['neutral', 1], HAPPY: ['happy', 0.9], PROUD: ['happy', 0.5], LOVING: ['happy', 0.6],
+  SAD: ['sad', 0.8], AFRAID: ['surprised', 0.5], SURPRISED: ['surprised', 0.9],
+  CURIOUS: ['thinking', 0.5], CONFUSED: ['thinking', 0.8], CALM: ['neutral', 1], AGGRESSIVE: ['neutral', 1],
+};
+
+function applyAction(code: ActionCode) {
+  if (!avatar) return;
+  if (avatar.applyAction?.(code)) return;
+  if (code.category === 'EMOTION' && HUMAN_EXPRESSIONS[code.value]) {
+    const [name, k] = HUMAN_EXPRESSIONS[code.value];
+    avatar.setExpression(name, k * (code.param ? parseFloat(code.param) || 1 : 1));
+  } else if (code.category === 'FX' && (code.value === 'NOD' || code.value === 'PULSE')) avatar.nod();
+  else if (code.category === 'RESET') avatar.setExpression('neutral', 1);
+  else console.info('[actions] code non joué par cette apparence :', code.raw);
+}
+voice.onCue = applyAction;
+
+/** Joue tout de suite les codes d'un texte (champ de test des réglages, console). */
+function testActions(text: string) {
+  const { cues, unknown } = parseActions(text.includes('[[') ? text : `[[${text}]]`);
+  for (const c of cues) applyAction(c.code);
+  if (unknown.length) showError(`Code inconnu : ${unknown.join(' ')}`);
+  return cues.length;
+}
 
 // ---------------------------------------------------------------- Conversation
 const STATE_LABEL: Record<ConversationState, string> = {
@@ -263,13 +294,14 @@ $<HTMLSelectElement>('agent-list').addEventListener('change', (e) => {
 $('demo').addEventListener('click', () => {
   voice.unlock();
   conversation.interrupt();
+  avatar?.resetActions?.();
   voice.lang = (form.elements.namedItem('lang') as HTMLSelectElement).value;
   avatar?.setMode('speaking');
   avatar?.setExpression('happy', 0.5);
   voice.say(
     voice.lang === 'fr'
-      ? 'Bonjour ! Je suis votre avatar Breign. Parlez-moi simplement, je vous écoute, et vous pouvez me couper la parole quand vous voulez.'
-      : 'Hello! I am your Breign avatar. Just talk to me, I am listening, and feel free to interrupt me at any time.',
+      ? '[[ACTION.EMOTION.HAPPY]] Bonjour ! Je suis votre avatar Breign. [[ACTION.FX.PULSE]] Parlez-moi simplement, je vous écoute, et vous pouvez me couper la parole quand vous voulez.'
+      : '[[ACTION.EMOTION.HAPPY]] Hello! I am your Breign avatar. [[ACTION.FX.PULSE]] Just talk to me, I am listening, and feel free to interrupt me at any time.',
   );
 });
 
@@ -319,6 +351,30 @@ async function boot() {
 }
 void boot();
 
-// Accès console pour le débogage.
-Object.assign(window, { stage, voice, conversation, THREE });
+// ---------------------------------------------------------------- Test des codes d'action
+const codeList = $<HTMLDataListElement>('action-codes');
+for (const c of allActionCodes()) codeList.append(new Option(c));
+const codeInput = $<HTMLInputElement>('action-test');
+$('action-run').addEventListener('click', () => {
+  if (codeInput.value.trim()) testActions(codeInput.value);
+});
+codeInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (codeInput.value.trim()) testActions(codeInput.value);
+});
+$('action-reset').addEventListener('click', () => testActions('[[ACTION.RESET]]'));
+$('action-copy').addEventListener('click', async (e) => {
+  const btn = e.currentTarget as HTMLButtonElement;
+  try {
+    await navigator.clipboard.writeText(actionPrompt());
+    btn.textContent = 'Consignes copiées ✓';
+  } catch {
+    showError('Copie impossible : les consignes sont dans docs/codes-action.md.');
+  }
+  setTimeout(() => (btn.textContent = 'Copier les consignes pour l’agent'), 2500);
+});
+
+// Accès console pour le débogage : actions('[[ACTION.EMOTION.AGGRESSIVE]]').
+Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt });
 Object.defineProperty(window, 'avatar', { get: () => avatar });
