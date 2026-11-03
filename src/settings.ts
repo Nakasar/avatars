@@ -14,6 +14,11 @@ export interface AppSettings extends BreignSettings {
 }
 
 const KEY = 'breign-avatar:settings';
+/**
+ * Version des réglages enregistrés. 2 : l'orbe devient l'apparence par défaut ; les réglages
+ * plus anciens enregistraient « humain » sans que l'utilisateur l'ait choisi, on l'oublie.
+ */
+const VERSION = 2;
 
 /**
  * Réglages : valeurs par défaut (variables VITE_*), puis celles enregistrées dans ce navigateur,
@@ -29,7 +34,8 @@ export function loadSettings(): AppSettings {
     appId: env.VITE_BREIGN_APP_ID || '',
     lang: env.VITE_BREIGN_LANG || 'fr',
     modelUrl: env.VITE_AVATAR_MODEL_URL || '',
-    appearance: env.VITE_AVATAR_APPEARANCE === 'orb' ? 'orb' : 'human',
+    // L'orbe par défaut ; l'humain 3D se choisit dans les réglages (ou VITE_AVATAR_APPEARANCE=human).
+    appearance: env.VITE_AVATAR_APPEARANCE === 'human' ? 'human' : 'orb',
     orbColor: isOrbColor(env.VITE_AVATAR_ORB_COLOR) ? env.VITE_AVATAR_ORB_COLOR : 'blue',
     instanceId: env.VITE_BREIGN_INSTANCE_ID || '',
   };
@@ -39,6 +45,7 @@ export function loadSettings(): AppSettings {
   } catch {
     /* stockage indisponible */
   }
+  if ((stored as { version?: number }).version !== VERSION) delete stored.appearance;
   const q = new URLSearchParams(location.search);
   const fromUrl: Partial<AppSettings> = {};
   if (q.get('agent')) fromUrl.agentId = q.get('agent')!;
@@ -51,14 +58,14 @@ export function loadSettings(): AppSettings {
   const clean = (o: Partial<AppSettings>) =>
     Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== ''));
   const merged = { ...defaults, ...clean(stored), ...clean(fromUrl) } as AppSettings;
-  if (merged.appearance !== 'orb') merged.appearance = 'human';
+  if (merged.appearance !== 'human') merged.appearance = 'orb';
   if (!isOrbColor(merged.orbColor)) merged.orbColor = 'blue';
   return merged;
 }
 
 export function saveSettings(s: AppSettings) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    localStorage.setItem(KEY, JSON.stringify({ ...s, version: VERSION }));
   } catch {
     /* stockage indisponible */
   }
