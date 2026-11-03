@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/breign-api/:path*", "destination": "https://api.breign.eu/:path*" },
+    { "source": "/((?!breign-api/|assets/|basis/|models/).*)", "destination": "/index.html" }
+  ]
+}
