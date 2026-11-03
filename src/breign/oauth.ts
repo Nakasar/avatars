@@ -56,6 +56,14 @@ export async function startLogin(basePath: string) {
     location.replace(url);
     return;
   }
+  if (OAUTH_CLIENT_ID === 'breign-cli' && location.hostname !== '127.0.0.1') {
+    // Le client de la CLI n'accepte que les retours loopback : Breign répondrait
+    // « Invalid authorization request » sur une page JSON. On prévient plutôt ici.
+    throw new Error(
+      'Connexion Breign indisponible sur ce site : il faut un client OAuth Breign déclaré pour ' +
+        `${location.origin}${CALLBACK_PATH} (VITE_BREIGN_OAUTH_CLIENT_ID). En attendant, utilisez une clé API dans les réglages.`,
+    );
+  }
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = base64url(
     new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
