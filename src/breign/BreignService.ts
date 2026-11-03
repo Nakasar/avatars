@@ -8,6 +8,7 @@ import {
   type AgentUio,
 } from '@breign/client';
 import { collectNativeActions, type NativeAction } from './nativeActions';
+import { breignConfig, isSignedIn } from './oauth';
 
 export interface BreignSettings {
   /** URL de l'API. En dev, `/breign-api` passe par le proxy Vite vers https://api.breign.eu. */
@@ -51,17 +52,15 @@ export class BreignService {
   private authSecret?: Promise<string>;
 
   constructor(readonly settings: BreignSettings) {
-    const config = new Configuration({
-      basePath: settings.basePath.replace(/\/$/, ''),
-      apiKey: settings.apiKey,
-    });
+    // Clé API (X-API-Key) ou session OAuth (Authorization: Bearer, renouvelée au besoin).
+    const config = new Configuration(breignConfig(settings));
     this.prompts = new PromptsApi(config);
     this.agents = new AgentApi(config);
     this.apps = new AppApi(config);
   }
 
   get configured() {
-    return Boolean(this.settings.apiKey && this.settings.agentId);
+    return Boolean(isSignedIn(this.settings) && this.settings.agentId);
   }
 
   resetConversation() {
