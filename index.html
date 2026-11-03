@@ -79,6 +79,10 @@
           <input name="appId" placeholder="id de l’application, pour la voix Breign" />
           <small>Sans application, la voix du navigateur est utilisée.</small>
         </label>
+        <label>Web socket de l’application — optionnel
+          <input name="socketUrl" placeholder="wss://…/apps/{appId}?…" />
+          <small>Reçoit les actions natives de Breign (<code>SHOW_IMAGE</code>…). <code>{appId}</code> et <code>{apiKey}</code> sont remplacés.</small>
+        </label>
         <label>Langue
           <select name="lang"><option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="es">Español</option><option value="it">Italiano</option></select>
         </label>

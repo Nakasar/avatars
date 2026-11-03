@@ -9,6 +9,11 @@ export interface AppSettings extends BreignSettings {
   appearance: Appearance;
   /** Couleur de l'orbe. */
   orbColor: OrbColor;
+  /**
+   * Web socket de l'application Breign, sur laquelle arrivent les actions natives
+   * (`SHOW_IMAGE`…). `{appId}` et `{apiKey}` y sont remplacés. Vide : pas de connexion.
+   */
+  socketUrl: string;
   /** Compte obtenu par « Se connecter avec Breign » (absent pour une clé collée à la main). */
   account?: BreignAccount;
 }
@@ -31,6 +36,7 @@ export function loadSettings(): AppSettings {
     modelUrl: env.VITE_AVATAR_MODEL_URL || '',
     appearance: env.VITE_AVATAR_APPEARANCE === 'orb' ? 'orb' : 'human',
     orbColor: isOrbColor(env.VITE_AVATAR_ORB_COLOR) ? env.VITE_AVATAR_ORB_COLOR : 'blue',
+    socketUrl: env.VITE_BREIGN_SOCKET_URL || '',
   };
   let stored: Partial<AppSettings> = {};
   try {

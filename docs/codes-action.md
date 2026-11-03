@@ -201,6 +201,14 @@ Exemple : « [[ACTION.RESET]] Bon, reprenons calmement. »
 | Vidéo | `SHOW_VIDEO`, `PLAY_VIDEO`… | la vidéo est lue en boucle, sans le son, dans le même panneau. |
 | Page web | `OPEN_URL`, `OPEN_WEBVIEW`, `SHOW_LINK`… | la page s’ouvre dans le panneau (le bouton ↗ l’ouvre dans un onglet si le site refuse d’être intégré). |
 
+Les avatars Breign reçoivent aussi ces actions sur la **web socket de l’application**, sous forme de messages typés (`SAY` pour dire un texte, `SHOW_IMAGE` pour montrer une image) :
+
+```json
+{ "type": "SHOW_IMAGE", "messageId": "…", "sequence": 0, "text": "An image", "image": { "title": "An image", "src": "https://…" } }
+```
+
+Renseignez son URL dans les réglages (« Web socket de l’application », ou `VITE_BREIGN_SOCKET_URL`) : `{appId}` et `{apiKey}` y sont remplacés. Les `SAY` y sont ignorés, la réponse parlée étant déjà suivie par l’API. Pour essayer sans connexion : `appSocketMessage({ type: "SHOW_IMAGE", image: { src: "https://…", title: "…" } })` dans la console.
+
 La lecture est tolérante : le code est comparé sans casse ni séparateurs, l’URL est cherchée sous `url`, `src`, `imageUrl`, `image`, `href`, `link`… (au premier niveau ou dans `params`/`data`), la légende sous `title`, `alt`, `caption`, `label`. Une action sans URL ou inconnue est notée dans la console (`[breign] action native non gérée`). Le panneau se ferme au début de la réponse suivante. Pour essayer : `showMedia({ kind: "image", url: "https://…", title: "…" })` dans la console.
 
 ## Ajouter un code

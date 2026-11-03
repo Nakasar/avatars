@@ -12,6 +12,7 @@ import { parseActions } from './actions/parse';
 import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
 import type { Expression } from './avatar/Avatar';
 import type { NativeAction } from './breign/nativeActions';
+import { AppSocket, socketUrl } from './breign/AppSocket';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -161,6 +162,26 @@ function handleNativeActions(actions: NativeAction[]) {
     if (a !== shown) console.info('[breign] action native non gérée :', a.code, a.raw);
   }
 }
+
+// Web socket de l'application : la plateforme y pousse les actions natives (SHOW_IMAGE…).
+let socket: AppSocket | undefined;
+let socketKey = '';
+const socketEvents = {
+  onAction: (a: NativeAction) => handleNativeActions([a]),
+  onSay: (m: { text?: string }) => console.debug('[breign] SAY reçu sur la web socket :', m.text),
+};
+function connectSocket() {
+  const url = settings.socketUrl ? socketUrl(settings.socketUrl, settings) : '';
+  if (url === socketKey) return;
+  socket?.close();
+  socket = undefined;
+  socketKey = url;
+  if (!url) return;
+  socket = new AppSocket(url, socketEvents);
+  socket.connect();
+}
+/** Joue un message de la web socket à la main : appSocketMessage({ type: 'SHOW_IMAGE', … }). */
+const appSocketMessage = (m: unknown) => (socket ?? new AppSocket('', socketEvents)).handle(m);
 
 // ---------------------------------------------------------------- Conversation
 const STATE_LABEL: Record<ConversationState, string> = {
@@ -369,6 +390,7 @@ $('demo').addEventListener('click', () => {
 async function applySettings() {
   breign = new BreignService(settings);
   voice.lang = settings.lang;
+  connectSocket();
   if (!breign.configured) {
     $('agent-name').textContent = '';
     return;
@@ -438,5 +460,5 @@ $('action-copy').addEventListener('click', async (e) => {
 
 // Accès console pour le débogage : actions('[[ACTION.EMOTION.AGGRESSIVE]]').
 // showMedia({ kind: 'image', url: '…', title: '…' }) montre un média comme le ferait l'agent.
-Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions });
+Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
 Object.defineProperty(window, 'avatar', { get: () => avatar });
