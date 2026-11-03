@@ -7,7 +7,7 @@ import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
-import { completeLogin, revokeLogin, startLogin } from './breign/oauth';
+import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
 import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
 import type { Expression } from './avatar/Avatar';
@@ -229,8 +229,9 @@ const SOCKET_LABEL: Record<SocketState, string> = {
   failed: 'Web socket indisponible : réponses par l’API des agents.',
 };
 function connectSocket() {
-  const { appId, agentId, apiKey, basePath, instanceId } = settings;
-  const key = appId && agentId && apiKey ? [basePath, appId, instanceId, agentId, apiKey].join('|') : '';
+  const { appId, agentId, basePath, instanceId } = settings;
+  const cred = credentialTag(settings);
+  const key = appId && agentId && cred ? [basePath, appId, instanceId, agentId, cred].join('|') : '';
   if (key === socketKey) return;
   socket?.close();
   socket = undefined;
@@ -304,7 +305,7 @@ function showError(msg: string) {
 // Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
 async function begin() {
   if (conversation.current !== 'off') return;
-  if (!settings.apiKey) {
+  if (!isSignedIn(settings)) {
     // Pas encore connecté : la page part vers Breign, puis revient ici, connectée.
     void login();
     return;
@@ -387,7 +388,7 @@ $('settings-btn').addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- Connexion Breign (OAuth2)
 function renderAccount() {
-  const signedIn = Boolean(settings.apiKey);
+  const signedIn = isSignedIn(settings);
   $('account-out').hidden = signedIn;
   $('account-in').hidden = !signedIn;
   $('account-name').textContent = settings.account
@@ -503,10 +504,10 @@ async function boot() {
     // Reprise après la bascule localhost → 127.0.0.1.
     q.delete('login');
     history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}`);
-    if (!settings.apiKey) return void login();
+    if (!isSignedIn(settings)) return void login();
   }
   await applySettings();
-  if (settings.apiKey && !settings.agentId) {
+  if (isSignedIn(settings) && !settings.agentId) {
     openSettings('Connecté à Breign. Choisissez maintenant l’agent qui vous répondra.');
     $('load-agents').click();
   }
