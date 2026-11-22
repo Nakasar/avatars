@@ -146,7 +146,14 @@ Dans les deux cas :
   en direct dans le panneau « Transcription »**, horodaté ;
 - quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
   la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
-  dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
+  12 dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
+- **outil local `TRANSCRIPT_SEARCH`** : toute la transcription est gardée en mémoire (5000
+  lignes). L'agent peut la fouiller en émettant `[ACTION.TOOL.TRANSCRIPT_SEARCH:mot-clé]`
+  (code d'action, donc aussi reçu en `DO_ACTION` avec une application ; consignes copiables
+  dans ⚙ → « Copier les consignes », voir [docs/codes-action.md](docs/codes-action.md)) :
+  l'avatar exécute la recherche localement et renvoie les passages horodatés les plus
+  pertinents (40 max, tronqué à 8000 caractères) comme message suivant — l'agent peut ainsi
+  aller rechercher n'importe où dans la réunion, pas seulement dans les 12 dernières lignes ;
 - si quelqu'un prend vraiment la parole (près d'une seconde) pendant que l'avatar répond, il se
   tait (barge-in) ; un « hmm » ou une toux ne le coupe pas, et une réponse en préparation n'est
   jamais abandonnée parce que la réunion continue de parler ;
@@ -154,9 +161,11 @@ Dans les deux cas :
 
 En mode réunion, le micro ne déclenche plus de tour : seule la réunion est écoutée (la saisie
 au clavier `/` reste possible). Le mot d'activation se règle dans les réglages (⚙), par
-`VITE_MEETING_WAKE_WORD` ou `?wake=…` ; la détection ignore la casse et les accents et respecte
-les frontières de mot (« breigner » ne déclenche pas « breign »). Arrêter le partage depuis la
-barre du navigateur quitte le mode réunion.
+`VITE_MEETING_WAKE_WORD` ou `?wake=…` ; la détection ignore la casse et les accents, accepte les
+**variantes phonétiques** (« Brain », « Bren », « Breigne » pour « breign », via une clé
+phonétique française simplifiée + distance d'édition) et respecte les frontières de mot
+(« breigner » ne déclenche pas « breign »). Arrêter le partage depuis la barre du navigateur
+quitte le mode réunion.
 
 ## Architecture
 
