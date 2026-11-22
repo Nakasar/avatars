@@ -147,8 +147,10 @@ Dans les deux cas :
 - quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
   la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
   dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
-- si quelqu'un parle pendant que l'avatar répond, il se tait aussitôt (barge-in, mêmes seuils
-  relevés que pour le micro).
+- si quelqu'un prend vraiment la parole (près d'une seconde) pendant que l'avatar répond, il se
+  tait (barge-in) ; un « hmm » ou une toux ne le coupe pas, et une réponse en préparation n'est
+  jamais abandonnée parce que la réunion continue de parler ;
+- les énoncés sont transcrits en parallèle mais affichés dans l'ordre où ils ont été dits.
 
 En mode réunion, le micro ne déclenche plus de tour : seule la réunion est écoutée (la saisie
 au clavier `/` reste possible). Le mot d'activation se règle dans les réglages (⚙), par
