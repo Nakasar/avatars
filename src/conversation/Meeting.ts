@@ -37,7 +37,8 @@ const MEETING_VAD = {
   thresholdDb: 12,
   floorDb: -58,
   bargeInBoostDb: 9,
-  bargeInStartMs: 320,
+  // En réunion, on ne coupe l'avatar que pour une vraie prise de parole, pas pour un « hmm ».
+  bargeInStartMs: 900,
 };
 
 /** Nombre de lignes de transcription gardées (affichage et contexte envoyé à l'agent). */
@@ -54,14 +55,23 @@ const CONTEXT_LINES = 12;
  * vive voix. En mode « mic », sa propre voix (retour des enceintes) est reconnue et ignorée.
  *
  * Pendant que l'avatar parle, les seuils du VAD sont relevés (barge-in) : si quelqu'un de la
- * réunion reprend la parole, l'avatar se tait aussitôt.
+ * réunion prend vraiment la parole (près d'une seconde), l'avatar se tait. Une réponse en
+ * préparation n'est jamais abandonnée parce que la réunion continue de parler.
  */
 export class MeetingSession {
   private vad?: VoiceActivity;
   private stream?: MediaStream;
   private ownsStream = false;
   private source?: MeetingSource;
-  private turn = 0;
+  /** Incrémenté à l'arrêt : les transcriptions encore en cours d'une session close sont ignorées. */
+  private epoch = 0;
+  /** Numéro du prochain énoncé, et du prochain à verser dans la transcription (ordre de parole). */
+  private nextSeq = 0;
+  private nextToFlush = 0;
+  /** Transcriptions arrivées en avance (STT plus rapide pour un énoncé plus récent). */
+  private ready = new Map<number, { time: string; text: string }>();
+  /** Le VAD de la réunion est au milieu d'un énoncé. */
+  private inSpeech = false;
   private lines: TranscriptLine[] = [];
   /** Ce que l'avatar vient de dire (pour reconnaître sa propre voix revenue par le micro). */
   private agentSpeech = '';
@@ -153,8 +163,19 @@ export class MeetingSession {
     this.ownsStream = owns;
 
     const vad = (this.vad = new VoiceActivity(this.voice.ctx, MEETING_VAD));
-    vad.onSpeechStart = (bargeIn) => this.conversation.noteSpeechStart(bargeIn);
-    vad.onSpeechEnd = (u) => void this.onUtterance(u);
+    vad.onSpeechStart = (bargeIn) => {
+      this.inSpeech = true;
+      this.conversation.noteSpeechStart(bargeIn);
+    };
+    vad.onSpeechEnd = (u) => {
+      this.inSpeech = false;
+      void this.onUtterance(u);
+    };
+    // Bruit bref (toux, clic) : rien à transcrire, on rend la main.
+    vad.onSpeechCancel = () => {
+      this.inSpeech = false;
+      this.releaseIfQuiet();
+    };
     vad.onLevel = (level) => this.events.onLevel?.(level);
     try {
       await vad.start(stream);
@@ -171,7 +192,10 @@ export class MeetingSession {
     const source = this.source;
     this.vad = undefined;
     this.source = undefined;
-    this.turn++;
+    this.epoch++;
+    this.inSpeech = false;
+    this.ready.clear();
+    this.nextToFlush = this.nextSeq;
     vad?.stop(); // le VAD n'est jamais propriétaire du flux
     if (this.ownsStream) this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = undefined;
@@ -188,47 +212,73 @@ export class MeetingSession {
     return isEchoOf(text, this.agentSpeech);
   }
 
-  /** Transcrit un énoncé de la réunion ; appelle l'avatar si le mot d'activation est présent. */
+  /** Plus personne ne parle et aucune transcription n'est en attente : l'avatar rend la main. */
+  private releaseIfQuiet() {
+    if (!this.inSpeech && this.nextToFlush === this.nextSeq) this.conversation.noteSpeechEnd();
+  }
+
+  /**
+   * Transcrit un énoncé de la réunion. Les énoncés sont transcrits en parallèle (le STT peut
+   * être plus lent que la parole) mais versés dans la transcription dans l'ordre où ils ont été
+   * dits : aucun n'est perdu quand un autre se termine pendant sa transcription.
+   */
   private async onUtterance(u: Utterance) {
-    const turn = ++this.turn;
+    const epoch = this.epoch;
+    const seq = this.nextSeq++;
+    const time = timestamp(); // heure de la parole, pas de la fin de la transcription
+    let text = '';
     const breign = this.getBreign();
-    if (!breign.configured) {
-      this.conversation.noteSpeechEnd();
-      return;
+    if (breign.configured) {
+      try {
+        text = await this.conversation.transcribe(u);
+      } catch (e) {
+        const message = await describeError(e);
+        if (epoch === this.epoch) this.events.onError?.(message);
+      }
     }
-    let text: string;
-    try {
-      text = await this.conversation.transcribe(u);
-    } catch (e) {
-      if (turn === this.turn) this.events.onError?.(await describeError(e));
-      this.conversation.noteSpeechEnd();
-      return;
+    if (epoch !== this.epoch) return;
+    this.ready.set(seq, { time, text });
+    while (this.ready.has(this.nextToFlush)) {
+      const r = this.ready.get(this.nextToFlush)!;
+      this.ready.delete(this.nextToFlush++);
+      if (r.text) this.addLine(r.time, r.text);
     }
-    if (turn !== this.turn || !text) {
-      if (turn === this.turn) this.conversation.noteSpeechEnd();
-      return;
-    }
+    this.releaseIfQuiet();
+  }
+
+  /** Ajoute une ligne à la transcription ; appelle l'avatar si le mot d'activation est présent. */
+  private addLine(time: string, text: string) {
     // En mode « mic », l'appareil peut entendre sa propre voix (enceintes) : on la reconnaît
     // au chevauchement de mots avec ce que l'avatar vient de dire, et elle ne déclenche rien.
     const self = this.isEcho(text);
     const hit = self ? null : findWakeWord(text, this.getWakeWord());
-    const line: TranscriptLine = { time: timestamp(), text, addressed: Boolean(hit), self };
+    const line: TranscriptLine = { time, text, addressed: Boolean(hit), self };
     this.lines.push(line);
     if (this.lines.length > MAX_LINES) this.lines.shift();
     this.events.onTranscript?.(line);
-    if (self || !hit) {
-      this.conversation.noteSpeechEnd();
-      return;
-    }
-    // La question est ce qui suit le mot d'activation (« Breign, quelles sont les étapes ? »).
-    const question = (text.slice(hit.index + hit.length).trim() || text.slice(0, hit.index).trim() || text).trim();
+    if (!hit) return;
+    const question = questionFor(text, hit);
     const context = this.lines.slice(-CONTEXT_LINES).map((l) => `${l.time} — ${l.text}`).join('\n');
-    const en = breign.settings.lang.startsWith('en');
+    const en = this.getBreign().settings.lang.startsWith('en');
     const message = en
       ? `[Meeting transcript — last lines]\n${context}\n\n[You are being addressed in the meeting]: “${question}”`
       : `[Transcription de la réunion — dernières lignes]\n${context}\n\n[On s’adresse à toi dans la réunion] : « ${question} »`;
     this.conversation.sendText(message);
   }
+}
+
+/** Ponctuation et espaces sans contenu (« ? », « , », « … ») autour d'un fragment. */
+const EDGE_PUNCT = /^[\s,.;:!?…«»"“”'’()\-–—]+|[\s,.;:!?…«»"“”'’()\-–—]+$/g;
+
+/**
+ * La question posée à l'avatar : ce qui suit le mot d'activation (« Breign, quelles sont les
+ * étapes ? »). Quand le mot est en fin de phrase (« Qu'en penses-tu, Breign ? »), ce qui suit
+ * n'est que de la ponctuation : on garde alors la phrase entière, que l'agent comprend très bien.
+ */
+export function questionFor(text: string, hit: { index: number; length: number }): string {
+  const after = text.slice(hit.index + hit.length).replace(EDGE_PUNCT, '');
+  if (/[\p{L}\p{N}]/u.test(after)) return text.slice(hit.index + hit.length).replace(/^[\s,.;:!\-–—]+/, '').trim();
+  return text.trim();
 }
 
 function timestamp(): string {

@@ -160,15 +160,23 @@ export class Conversation {
 
   /**
    * Mode réunion : un son vient d'être détecté sur l'audio de la réunion (VAD dédié).
-   * `bargeIn` : l'avatar était en train de parler, il se tait et écoute.
+   *
+   * Contrairement au micro (une seule personne, qui parle à l'avatar), la réunion parle
+   * presque tout le temps et pas forcément à l'avatar :
+   *  - pendant qu'il réfléchit, une réponse demandée n'est jamais abandonnée ;
+   *  - pendant qu'il parle, il se tait (barge-in) — le VAD de la réunion n'émet ce cas
+   *    qu'après une prise de parole longue (`bargeInStartMs`), pas pour un « hmm ». Entre deux
+   *    phrases d'une réponse (état `speaking` sans `bargeIn`), on ne l'interrompt pas non plus.
    */
   noteSpeechStart(bargeIn: boolean) {
-    this.userStarted(bargeIn);
+    if (bargeIn) return this.userStarted(true);
+    if (this.state === 'speaking' || this.state === 'thinking' || this.state === 'transcribing') return;
+    this.userStarted(false);
   }
 
-  /** Mode réunion : fin d'un énoncé qui ne s'adressait pas à l'avatar, on rend la main. */
+  /** Mode réunion : plus personne ne parle et rien ne s'adressait à l'avatar, on rend la main. */
   noteSpeechEnd() {
-    this.userCancelled();
+    if (this.state === 'user-speaking') this.userCancelled();
   }
 
   private userStarted(bargeIn: boolean) {
