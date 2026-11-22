@@ -164,8 +164,8 @@ au clavier `/` reste possible). Le mot d'activation se règle dans les réglages
 `VITE_MEETING_WAKE_WORD` ou `?wake=…` ; la détection ignore la casse et les accents, accepte les
 **variantes phonétiques** (« Brain », « Bren », « Breigne » pour « breign », via une clé
 phonétique française simplifiée + distance d'édition) et respecte les frontières de mot
-(« breigner » ne déclenche pas « breign »). Les **noms génériques « agent », « bot » et
-« robot »** déclenchent aussi la réponse (attention aux faux positifs, ex. « l'agent
+(« breigner » ne déclenche pas « breign »). « **Breign** » est toujours écouté (même si l'agent a un autre nom), ainsi que les **noms
+génériques « agent », « bot » et « robot »** (attention aux faux positifs, ex. « l'agent
 immobilier »). Arrêter le partage depuis la barre du navigateur quitte le mode réunion.
 
 ## Architecture
