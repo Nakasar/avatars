@@ -41,10 +41,15 @@ const MEETING_VAD = {
   bargeInStartMs: 900,
 };
 
-/** Nombre de lignes de transcription gardées (affichage et contexte envoyé à l'agent). */
-const MAX_LINES = 200;
+/** Lignes de transcription gardées en mémoire : toute la réunion, pour l'outil de recherche. */
+const MEMORY_LINES = 5000;
 /** Lignes récentes transmises à l'agent quand on l'appelle, pour le contexte de la réunion. */
 const CONTEXT_LINES = 12;
+/** Outil TRANSCRIPT_SEARCH : nombre max de passages renvoyés, et taille max du résultat. */
+const SEARCH_LIMIT = 40;
+const SEARCH_MAX_CHARS = 8000;
+/** Sans requête, l'outil renvoie la fin de la transcription (ce nombre de lignes). */
+const TAIL_LINES = 100;
 
 /**
  * Mode réunion : l'avatar devient un participant actif. Il écoute la réunion — l'audio d'un
@@ -208,6 +213,35 @@ export class MeetingSession {
     this.agentSpeech = text.slice(-400);
   }
 
+  /**
+   * Outil local `TRANSCRIPT_SEARCH` : consulte toute la transcription de la réunion gardée
+   * en mémoire. Sans requête : la fin de la transcription. Avec une requête : les passages
+   * qui contiennent le plus de ses mots, classés par pertinence (puis par ancienneté).
+   */
+  searchTranscript(query = ''): string {
+    const fmt = (l: TranscriptLine) => `${l.time} — ${l.text}`;
+    const clip = (s: string) =>
+      s.length > SEARCH_MAX_CHARS ? `${s.slice(0, SEARCH_MAX_CHARS)}\n… (tronqué)` : s;
+    const terms = normalizeForMatch(query).split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    if (!terms.length) {
+      const tail = this.lines.slice(-TAIL_LINES);
+      return clip(`Fin de la transcription (${tail.length}/${this.lines.length} dernières lignes) :\n${tail.map(fmt).join('\n')}`);
+    }
+    const scored: Array<{ l: TranscriptLine; score: number }> = [];
+    for (const l of this.lines) {
+      const t = normalizeForMatch(l.text);
+      let score = 0;
+      for (const term of terms) if (t.includes(term)) score++;
+      if (score) scored.push({ l, score });
+    }
+    // Tri stable : à pertinence égale, l'ordre chronologique est conservé.
+    scored.sort((a, b) => b.score - a.score);
+    const picked = scored.slice(0, SEARCH_LIMIT);
+    return clip(
+      `${scored.length} passage(s) sur ${this.lines.length} lignes pour « ${query.trim()} » (les ${picked.length} plus pertinents) :\n${picked.map((s) => fmt(s.l)).join('\n')}`,
+    );
+  }
+
   private isEcho(text: string) {
     return isEchoOf(text, this.agentSpeech);
   }
@@ -254,7 +288,7 @@ export class MeetingSession {
     const hit = self ? null : findWakeWord(text, this.getWakeWord());
     const line: TranscriptLine = { time, text, addressed: Boolean(hit), self };
     this.lines.push(line);
-    if (this.lines.length > MAX_LINES) this.lines.shift();
+    if (this.lines.length > MEMORY_LINES) this.lines.shift();
     this.events.onTranscript?.(line);
     if (!hit) return;
     const question = questionFor(text, hit);

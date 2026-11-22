@@ -90,6 +90,8 @@ const HUMAN_EXPRESSIONS: Record<string, [Expression, number]> = {
 };
 
 function applyAction(code: ActionCode) {
+  // Les codes TOOL ne touchent pas à l'apparence : l'avatar exécute l'outil localement.
+  if (code.category === 'TOOL') return void runLocalTool(code);
   if (!avatar) return;
   if (avatar.applyAction?.(code)) return;
   if (code.category === 'EMOTION' && HUMAN_EXPRESSIONS[code.value]) {
@@ -100,6 +102,29 @@ function applyAction(code: ActionCode) {
   else console.info('[actions] code non joué par cette apparence :', code.raw);
 }
 voice.onCue = applyAction;
+
+/**
+ * Outil local exécuté dans le navigateur (code `[ACTION.TOOL.…]` émis par l'agent, en texte
+ * ou en `DO_ACTION`) : le résultat est renvoyé à l'agent comme message suivant.
+ */
+function runLocalTool(code: ActionCode) {
+  const en = settings.lang.startsWith('en');
+  if (code.value !== 'TRANSCRIPT_SEARCH') return console.info('[tools] outil inconnu :', code.raw);
+  if (!meeting.active) {
+    return conversation.sendText(
+      en
+        ? '[Local tool TRANSCRIPT_SEARCH unavailable: no meeting in progress (🎧/🎙️ buttons).]'
+        : '[Outil local TRANSCRIPT_SEARCH indisponible : aucune réunion en cours (boutons 🎧/🎙️).]',
+    );
+  }
+  const query = code.param?.trim() ?? '';
+  const result = meeting.searchTranscript(query);
+  conversation.sendText(
+    en
+      ? `[Result of the local tool TRANSCRIPT_SEARCH${query ? ` (search “${query}”)` : ''} — full meeting transcript]\n${result}`
+      : `[Résultat de l’outil local TRANSCRIPT_SEARCH${query ? `, recherche « ${query} »` : ''} — transcription complète de la réunion]\n${result}`,
+  );
+}
 
 /** Joue tout de suite les codes d'un texte (champ de test des réglages, console). */
 function testActions(text: string) {
