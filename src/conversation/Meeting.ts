@@ -214,6 +214,14 @@ export class MeetingSession {
   }
 
   /**
+   * Mots d'activation testés : le réglage (ou le nom de l'agent), **toujours « breign »**
+   * (même si l'agent a un autre nom), plus les noms génériques (« agent », « bot », « robot »).
+   */
+  private wakeWords(): string[] {
+    return [...new Set([this.getWakeWord(), 'breign', ...GENERIC_WAKE_WORDS])];
+  }
+
+  /**
    * Outil local `TRANSCRIPT_SEARCH` : consulte toute la transcription de la réunion gardée
    * en mémoire. Sans requête : la fin de la transcription. Avec une requête : les passages
    * qui contiennent le plus de ses mots, classés par pertinence (puis par ancienneté).
@@ -285,8 +293,7 @@ export class MeetingSession {
     // En mode « mic », l'appareil peut entendre sa propre voix (enceintes) : on la reconnaît
     // au chevauchement de mots avec ce que l'avatar vient de dire, et elle ne déclenche rien.
     const self = this.isEcho(text);
-    // Le mot d'activation réglé, plus les noms génériques (« agent », « bot », « robot »).
-    const hit = self ? null : findWakeWord(text, [this.getWakeWord(), ...GENERIC_WAKE_WORDS]);
+    const hit = self ? null : findWakeWord(text, this.wakeWords());
     const line: TranscriptLine = { time, text, addressed: Boolean(hit), self };
     this.lines.push(line);
     if (this.lines.length > MEMORY_LINES) this.lines.shift();
