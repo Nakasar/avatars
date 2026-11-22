@@ -48,12 +48,13 @@ connexion. Une clé API collée à la main reste possible (« Utiliser une clé 
 | Application | Optionnel : application (avatar) Breign. La conversation passe alors par l'application et sa web socket (voix, images et actions de Breign), et sa transcription est utilisée. Sans elle, l'agent répond par l'API des prompts et la voix du navigateur est utilisée. |
 | Instance de l'application | Optionnel : instance de l'app pour cet appareil (une seule socket par instance). Vide : l'instance par défaut. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
+| Mot d'activation en réunion | En mode réunion (🎧), l'avatar ne répond que quand ce mot est prononcé dans l'audio partagé. Vide : le nom de l'agent, sinon « breign ». |
 | Apparence du bot | « Orbe IA (mascotte) », par défaut au chargement, ou « Humain réaliste » (le modèle 3D, chargé seulement s'il est choisi). L'aperçu change en direct. |
 | Couleur de l'orbe | Bleu, orange, vert ou violet. |
 | Modèle 3D | URL d'un GLB (voir plus bas), pour l'apparence humaine. |
 
 Les mêmes valeurs peuvent venir de `.env.local` (voir `.env.example`) ou de l'URL :
-`?agent=…&app=…&instance=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
+`?agent=…&app=…&instance=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&wake=Breign&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
 
 Le bouton « Tester la voix » des réglages fait parler l'avatar sans connexion à Breign.
 
@@ -125,6 +126,27 @@ bouton n'est nécessaire :
 - Sous-titres de la conversation et témoin d'état en bas de l'écran. `/` ouvre une saisie au
   clavier, `Échap` coupe l'avatar.
 
+## Mode réunion : companion actif
+
+Le bouton 🎧 (haut à droite) transforme l'avatar en participant de la visioconférence :
+
+1. le navigateur demande de **partager un onglet** (celui de la réunion, avec « partager
+   l'audio de l'onglet ») — la piste vidéo, exigée par Chrome, est aussitôt coupée ;
+2. l'audio de la réunion passe par le même VAD que le micro (`conversation/VoiceActivity.ts`,
+   avec un stream externe) : chaque énoncé est découpé, transcrit (STT Breign) et **affiché
+   en direct dans le panneau « Transcription »**, horodaté ;
+3. quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
+   la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
+   dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
+4. si quelqu'un parle pendant que l'avatar répond, il se tait aussitôt (barge-in, mêmes seuils
+   relevés que pour le micro).
+
+En mode réunion, le micro ne déclenche plus de tour : seule la réunion est écoutée (la saisie
+au clavier `/` reste possible). Le mot d'activation se règle dans les réglages (⚙), par
+`VITE_MEETING_WAKE_WORD` ou `?wake=…` ; la détection ignore la casse et les accents et respecte
+les frontières de mot (« breigner » ne déclenche pas « breign »). Arrêter le partage depuis la
+barre du navigateur quitte le mode réunion.
+
 ## Architecture
 
 ```
@@ -132,6 +154,7 @@ src/
   main.ts                  assemblage : scène, avatar, conversation, sous-titres, réglages
   conversation/
     Conversation.ts        tours de parole, interruptions, état de l'avatar
+    Meeting.ts             mode réunion : capture d'onglet, transcription, mot d'activation
     VoiceActivity.ts       écoute continue du micro, détection de voix, WAV 16 kHz
   settings.ts              réglages (env → navigateur → URL)
   scene/Stage.ts           rendu : tone mapping AgX, IBL, éclairage 3 points, ombres douces,
@@ -210,3 +233,7 @@ Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. L
   n'est pas annulée sur le serveur, seulement ignorée).
 - La détection de voix se base sur l'énergie : dans une pièce très bruyante, un modèle de VAD
   neuronal (Silero) serait plus fiable. Les seuils sont réglables dans `DEFAULT_VAD`.
+- En mode réunion, partagez **l'onglet de la visioconférence**, pas l'écran entier : avec le son
+  du système, la voix de l'avatar elle-même peut être recapturée (les seuils de barge-in
+  atténuent la boucle, sans la supprimer). `getDisplayMedia` exige un geste utilisateur et un
+  contexte sécurisé (HTTPS ou localhost).

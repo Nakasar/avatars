@@ -13,6 +13,7 @@
 
     <header class="topbar">
       <div class="brand"><span id="agent-name">Avatar Breign</span></div>
+      <button id="meeting-btn" class="icon" title="Mode réunion : écouter et transcrire un onglet de visioconférence" aria-label="Mode réunion">🎧</button>
       <button id="settings-btn" class="icon" title="Réglages" aria-label="Réglages">⚙</button>
     </header>
 
@@ -22,6 +23,14 @@
       <p id="caption-agent" class="caption agent"></p>
       <div id="suggestions" class="suggestions"></div>
     </section>
+
+    <!-- Transcription de la réunion (mode réunion) -->
+    <aside id="transcript" class="transcript" hidden aria-live="polite">
+      <h2>Transcription
+        <button type="button" id="transcript-clear" class="icon" title="Effacer la transcription" aria-label="Effacer la transcription">✕</button>
+      </h2>
+      <div id="transcript-lines"></div>
+    </aside>
 
     <!-- Indicateur d'état : pas de bouton, juste un témoin d'écoute -->
     <div class="presence">
@@ -86,6 +95,10 @@
         </label>
         <label>Langue
           <select name="lang"><option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="es">Español</option><option value="it">Italiano</option></select>
+        </label>
+        <label>Mot d’activation en réunion — optionnel
+          <input name="wakeWord" autocomplete="off" placeholder="nom de l’agent, ex. Breign" />
+          <small>En mode réunion (🎧), l’avatar transcrit la réunion et ne répond que quand ce mot est prononcé. Vide : le nom de l’agent, sinon « breign ».</small>
         </label>
         <label>Apparence du bot
           <select name="appearance">

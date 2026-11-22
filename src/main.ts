@@ -6,6 +6,7 @@ import { Orb, ORB_PALETTES } from './orb/Orb';
 import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
+import { MeetingSession, type TranscriptLine } from './conversation/Meeting';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
@@ -25,6 +26,8 @@ let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
 let avatar: Character | undefined;
+let agentName = '';
+let meetingActive = false;
 const DEFAULT_MODEL = '/models/human.glb';
 
 // ---------------------------------------------------------------- Apparence (humain ou orbe)
@@ -253,7 +256,10 @@ function connectSocket() {
   socket = s;
   s.connect();
 }
-window.addEventListener('pagehide', () => socket?.close());
+window.addEventListener('pagehide', () => {
+  socket?.close();
+  meeting.stop();
+});
 
 /** Joue un message comme s'il venait de la web socket : appSocketMessage({ type: 'SHOW_IMAGE', … }). */
 const appSocketMessage = (m: AppMessage) => conversation.onAppMessage(m);
@@ -271,12 +277,14 @@ const STATE_LABEL: Record<ConversationState, string> = {
 const conversation = new Conversation(voice, () => breign, () => avatar, {
   onState: (s) => {
     document.body.dataset.state = s;
-    $('hint').textContent = STATE_LABEL[s];
+    updateHint(s);
   },
   onUserText: (text) => caption('user', text),
   onAgentText: (text) => caption('agent', text || '…'),
   onError: (msg) => showError(msg),
-  onLevel: (level) => $('orb').style.setProperty('--level', level.toFixed(3)),
+  onLevel: (level) => {
+    if (!meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
+  },
   onNativeActions: handleNativeActions,
   onReplyStart: () => {
     hideMedia();
@@ -301,6 +309,60 @@ function showError(msg: string) {
   clearTimeout(errorTimer);
   errorTimer = window.setTimeout(() => el.classList.remove('visible'), 7000);
 }
+
+// ---------------------------------------------------------------- Mode réunion (companion)
+const meetingBtn = $('meeting-btn');
+const transcriptEl = $('transcript');
+const transcriptLines = $('transcript-lines');
+
+/** Mot d'activation : réglage, sinon nom de l'agent, sinon « breign ». */
+function wakeWord() {
+  return settings.wakeWord.trim() || agentName || 'breign';
+}
+
+function updateHint(s: ConversationState = conversation.current) {
+  $('hint').textContent = meetingActive
+    ? `Mode réunion : je transcris, et je réponds quand on m’appelle « ${wakeWord()} »`
+    : STATE_LABEL[s];
+}
+
+function appendTranscript(line: TranscriptLine) {
+  const p = document.createElement('p');
+  p.className = 'transcript-line' + (line.addressed ? ' addressed' : '');
+  const time = document.createElement('time');
+  time.textContent = line.time;
+  p.append(time, document.createTextNode(line.text));
+  transcriptLines.append(p);
+  while (transcriptLines.children.length > 200) transcriptLines.firstElementChild?.remove();
+  transcriptLines.scrollTop = transcriptLines.scrollHeight;
+}
+
+const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, {
+  onTranscript: appendTranscript,
+  onActive: (on) => {
+    meetingActive = on;
+    document.body.dataset.meeting = on ? 'on' : 'off';
+    transcriptEl.hidden = !on;
+    meetingBtn.classList.toggle('active', on);
+    // En mode réunion, seul l'audio de la réunion déclenche les tours (le micro est suspendu).
+    conversation.vad.paused = on;
+    updateHint();
+  },
+  onError: showError,
+  onLevel: (level) => {
+    if (meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
+  },
+});
+
+meetingBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (meeting.active) return meeting.stop();
+  void begin().then(() => {
+    if (conversation.current === 'off') return;
+    meeting.start().catch((err) => showError(err instanceof Error ? err.message : String(err)));
+  });
+});
+$('transcript-clear').addEventListener('click', () => transcriptLines.replaceChildren());
 
 // Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
 async function begin() {
@@ -424,7 +486,7 @@ $('logout').addEventListener('click', async () => {
 });
 
 dialog.addEventListener('close', () => {
-  conversation.vad.paused = false;
+  conversation.vad.paused = meetingActive;
   if (dialog.returnValue !== 'save') return void showCharacter(settings); // annule l'aperçu
   const next = readForm();
   // Une clé changée à la main n'est plus celle du compte connecté.
@@ -477,6 +539,7 @@ async function applySettings() {
   }
   try {
     const agent = await breign.getAgent();
+    agentName = agent.name;
     $('agent-name').textContent = agent.name;
   } catch (e) {
     showError(await describeError(e));
@@ -540,5 +603,5 @@ $('action-copy').addEventListener('click', async (e) => {
 
 // Accès console pour le débogage : actions('[ACTION.EMOTION.AGGRESSIVE]').
 // showMedia({ kind: 'image', url: '…', title: '…' }) montre un média comme le ferait l'agent.
-Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
+Object.assign(window, { stage, voice, conversation, meeting, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
 Object.defineProperty(window, 'avatar', { get: () => avatar });

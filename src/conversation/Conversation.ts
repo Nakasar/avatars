@@ -152,6 +152,25 @@ export class Conversation {
     void this.respond(text.trim());
   }
 
+  /** Transcrit un énoncé (WAV 16 kHz) avec la configuration Breign. */
+  async transcribe(u: Utterance): Promise<string> {
+    const wav = await toWav16k(u);
+    return (await this.getBreign().speechToText(wav)).trim();
+  }
+
+  /**
+   * Mode réunion : un son vient d'être détecté sur l'audio de la réunion (VAD dédié).
+   * `bargeIn` : l'avatar était en train de parler, il se tait et écoute.
+   */
+  noteSpeechStart(bargeIn: boolean) {
+    this.userStarted(bargeIn);
+  }
+
+  /** Mode réunion : fin d'un énoncé qui ne s'adressait pas à l'avatar, on rend la main. */
+  noteSpeechEnd() {
+    this.userCancelled();
+  }
+
   private userStarted(bargeIn: boolean) {
     const avatar = this.getAvatar();
     if (bargeIn || this.state === 'speaking') {
@@ -189,8 +208,7 @@ export class Conversation {
     avatar?.nod();
     avatar?.setMode('thinking');
     try {
-      const wav = await toWav16k(u);
-      const text = (await breign.speechToText(wav)).trim();
+      const text = await this.transcribe(u);
       if (turn !== this.turn) return;
       if (!text) {
         this.setState('idle');
