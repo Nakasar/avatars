@@ -285,7 +285,8 @@ export class MeetingSession {
     // En mode « mic », l'appareil peut entendre sa propre voix (enceintes) : on la reconnaît
     // au chevauchement de mots avec ce que l'avatar vient de dire, et elle ne déclenche rien.
     const self = this.isEcho(text);
-    const hit = self ? null : findWakeWord(text, this.getWakeWord());
+    // Le mot d'activation réglé, plus les noms génériques (« agent », « bot », « robot »).
+    const hit = self ? null : findWakeWord(text, [this.getWakeWord(), ...GENERIC_WAKE_WORDS]);
     const line: TranscriptLine = { time, text, addressed: Boolean(hit), self };
     this.lines.push(line);
     if (this.lines.length > MEMORY_LINES) this.lines.shift();
@@ -341,14 +342,31 @@ export function normalizeForMatch(s: string): string {
 }
 
 /**
- * Cherche le mot d'activation dans `text` : correspondance exacte (frontières de mot,
- * insensible à la casse et aux accents), puis **variantes phonétiques** (« Brain », « Bren »
- * pour « breign ») via une clé phonétique française simplifiée, puis petite distance
- * d'édition pour les fautes d'orthographe. Renvoie la position dans le texte d'origine.
+ * Noms génériques qui appellent aussi l'avatar en réunion, en plus du mot d'activation
+ * réglé (« Breign, … » mais aussi « Agent, … », « Bot, … », « Robot, … »).
  */
-export function findWakeWord(text: string, wake: string): { index: number; length: number } | null {
-  const w = normalizeForMatch(wake).replace(/\s+/g, ' ').trim();
-  if (!w) return null;
+export const GENERIC_WAKE_WORDS = ['agent', 'bot', 'robot'];
+
+/**
+ * Cherche un mot d'activation dans `text` (un ou plusieurs) : correspondance exacte
+ * (frontières de mot, insensible à la casse et aux accents), puis **variantes phonétiques**
+ * (« Brain », « Bren » pour « breign ») via une clé phonétique française simplifiée, puis
+ * petite distance d'édition pour les fautes d'orthographe. Renvoie la position, dans le texte
+ * d'origine, de la première occurrence trouvée.
+ */
+export function findWakeWord(text: string, wake: string | string[]): { index: number; length: number } | null {
+  const wakes = (Array.isArray(wake) ? wake : [wake])
+    .map((w) => normalizeForMatch(w).replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  let best: { index: number; length: number } | null = null;
+  for (const w of wakes) {
+    const hit = findOneWakeWord(text, w);
+    if (hit && (!best || hit.index < best.index)) best = hit;
+  }
+  return best;
+}
+
+function findOneWakeWord(text: string, w: string): { index: number; length: number } | null {
   // 1. Correspondance exacte sur le texte normalisé (la normalisation conserve la longueur :
   //    les index sont valables dans le texte d'origine).
   const pattern = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
