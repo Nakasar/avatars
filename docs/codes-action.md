@@ -113,6 +113,18 @@ Exemple : `[ACTION.SIZE.SMALL] Je me fais toute petite.`
 
 Exemple : `[ACTION.RESET] Bon, reprenons calmement.`
 
+## Outils locaux — `TOOL`
+
+Déclenche un outil exécuté localement par l'avatar, sans aucun effet visuel. Le résultat de l'outil arrive dans le message de conversation suivant : émets le code, puis attends ce résultat avant de conclure ta réponse.
+
+Paramètre : pour `TRANSCRIPT_SEARCH` : mots-clés recherchés dans la transcription (vide : la fin de la transcription).
+
+| Code | Alias | Effet |
+|---|---|---|
+| `[ACTION.TOOL.TRANSCRIPT_SEARCH]` | `TRANSCRIPT`, `RECHERCHE` | recherche dans toute la transcription de la réunion en cours (outil local exécuté par l’avatar) et renvoie les passages horodatés correspondants. |
+
+Exemple : `Qu’a-t-on dit sur le budget ? [ACTION.TOOL.TRANSCRIPT_SEARCH:budget]`
+
 ## Consignes pour le prompt de l’agent
 
 À coller dans le prompt système de l’agent Breign (aussi copiable depuis les réglages : « Copier les consignes pour l’agent »).
@@ -126,6 +138,7 @@ Règles :
 - Reste sobre : un à trois codes par réponse suffisent en général.
 - N'invente pas de code : utilise seulement ceux de la liste. N'explique jamais les codes à l'utilisateur.
 - L'émotion, la couleur, la forme et la taille durent jusqu'à ta réponse suivante.
+- Les codes `TOOL` exécutent un outil local chez l'avatar : émets le code, puis attends son résultat (prochain message de la conversation) avant de conclure.
 
 Codes disponibles :
 
@@ -189,6 +202,11 @@ Exemple : « [ACTION.SIZE.SMALL] Je me fais toute petite. »
 Remise à zéro — [ACTION.RESET] annule aussitôt émotion, couleur, forme, taille et effets en cours.
 - [ACTION.RESET]
 Exemple : « [ACTION.RESET] Bon, reprenons calmement. »
+
+Outils locaux — Déclenche un outil exécuté localement par l'avatar, sans aucun effet visuel. Le résultat de l'outil arrive dans le message de conversation suivant : émets le code, puis attends ce résultat avant de conclure ta réponse.
+Paramètre : pour TRANSCRIPT_SEARCH : mots-clés recherchés dans la transcription (vide : la fin de la transcription).
+- [ACTION.TOOL.TRANSCRIPT_SEARCH] : recherche dans toute la transcription de la réunion en cours (outil local exécuté par l’avatar) et renvoie les passages horodatés correspondants.
+Exemple : « Qu’a-t-on dit sur le budget ? [ACTION.TOOL.TRANSCRIPT_SEARCH:budget] »
 ```
 
 ## Avec une application Breign : la web socket

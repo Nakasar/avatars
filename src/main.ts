@@ -6,6 +6,7 @@ import { Orb, ORB_PALETTES } from './orb/Orb';
 import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
+import { MeetingSession, type MeetingSource, type TranscriptLine } from './conversation/Meeting';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
@@ -25,6 +26,8 @@ let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
 let avatar: Character | undefined;
+let agentName = '';
+let meetingActive = false;
 const DEFAULT_MODEL = '/models/human.glb';
 
 // ---------------------------------------------------------------- Apparence (humain ou orbe)
@@ -87,6 +90,8 @@ const HUMAN_EXPRESSIONS: Record<string, [Expression, number]> = {
 };
 
 function applyAction(code: ActionCode) {
+  // Les codes TOOL ne touchent pas à l'apparence : l'avatar exécute l'outil localement.
+  if (code.category === 'TOOL') return void runLocalTool(code);
   if (!avatar) return;
   if (avatar.applyAction?.(code)) return;
   if (code.category === 'EMOTION' && HUMAN_EXPRESSIONS[code.value]) {
@@ -97,6 +102,29 @@ function applyAction(code: ActionCode) {
   else console.info('[actions] code non joué par cette apparence :', code.raw);
 }
 voice.onCue = applyAction;
+
+/**
+ * Outil local exécuté dans le navigateur (code `[ACTION.TOOL.…]` émis par l'agent, en texte
+ * ou en `DO_ACTION`) : le résultat est renvoyé à l'agent comme message suivant.
+ */
+function runLocalTool(code: ActionCode) {
+  const en = settings.lang.startsWith('en');
+  if (code.value !== 'TRANSCRIPT_SEARCH') return console.info('[tools] outil inconnu :', code.raw);
+  if (!meeting.active) {
+    return conversation.sendText(
+      en
+        ? '[Local tool TRANSCRIPT_SEARCH unavailable: no meeting in progress (🎧/🎙️ buttons).]'
+        : '[Outil local TRANSCRIPT_SEARCH indisponible : aucune réunion en cours (boutons 🎧/🎙️).]',
+    );
+  }
+  const query = code.param?.trim() ?? '';
+  const result = meeting.searchTranscript(query);
+  conversation.sendText(
+    en
+      ? `[Result of the local tool TRANSCRIPT_SEARCH${query ? ` (search “${query}”)` : ''} — full meeting transcript]\n${result}`
+      : `[Résultat de l’outil local TRANSCRIPT_SEARCH${query ? `, recherche « ${query} »` : ''} — transcription complète de la réunion]\n${result}`,
+  );
+}
 
 /** Joue tout de suite les codes d'un texte (champ de test des réglages, console). */
 function testActions(text: string) {
@@ -253,7 +281,10 @@ function connectSocket() {
   socket = s;
   s.connect();
 }
-window.addEventListener('pagehide', () => socket?.close());
+window.addEventListener('pagehide', () => {
+  socket?.close();
+  meeting.stop();
+});
 
 /** Joue un message comme s'il venait de la web socket : appSocketMessage({ type: 'SHOW_IMAGE', … }). */
 const appSocketMessage = (m: AppMessage) => conversation.onAppMessage(m);
@@ -271,12 +302,17 @@ const STATE_LABEL: Record<ConversationState, string> = {
 const conversation = new Conversation(voice, () => breign, () => avatar, {
   onState: (s) => {
     document.body.dataset.state = s;
-    $('hint').textContent = STATE_LABEL[s];
+    updateHint(s);
   },
   onUserText: (text) => caption('user', text),
-  onAgentText: (text) => caption('agent', text || '…'),
+  onAgentText: (text) => {
+    caption('agent', text || '…');
+    meeting.noteAgentText(text); // pour filtrer l'écho de sa propre voix en mode réunion « mic »
+  },
   onError: (msg) => showError(msg),
-  onLevel: (level) => $('orb').style.setProperty('--level', level.toFixed(3)),
+  onLevel: (level) => {
+    if (!meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
+  },
   onNativeActions: handleNativeActions,
   onReplyStart: () => {
     hideMedia();
@@ -301,6 +337,84 @@ function showError(msg: string) {
   clearTimeout(errorTimer);
   errorTimer = window.setTimeout(() => el.classList.remove('visible'), 7000);
 }
+
+// ---------------------------------------------------------------- Mode réunion (companion)
+const meetingBtn = $('meeting-btn');
+const meetingMicBtn = $('meeting-mic-btn');
+const transcriptEl = $('transcript');
+const transcriptLines = $('transcript-lines');
+
+/** Mot d'activation : réglage, sinon nom de l'agent, sinon « breign ». */
+function wakeWord() {
+  return settings.wakeWord.trim() || agentName || 'breign';
+}
+
+function updateHint(s: ConversationState = conversation.current) {
+  if (!meetingActive) {
+    $('hint').textContent = STATE_LABEL[s];
+    return;
+  }
+  const src =
+    meeting.currentSource === 'mic'
+      ? 'le micro de cet appareil écoute la pièce'
+      : 'j’écoute l’onglet partagé';
+  $('hint').textContent = `Mode réunion : ${src} — je transcris, et je réponds quand on m’appelle « ${wakeWord()} »`;
+}
+
+function appendTranscript(line: TranscriptLine) {
+  const p = document.createElement('p');
+  p.className =
+    'transcript-line' + (line.addressed ? ' addressed' : '') + (line.self ? ' self' : '');
+  const time = document.createElement('time');
+  time.textContent = line.time;
+  p.append(time, document.createTextNode(line.text));
+  transcriptLines.append(p);
+  while (transcriptLines.children.length > 200) transcriptLines.firstElementChild?.remove();
+  transcriptLines.scrollTop = transcriptLines.scrollHeight;
+}
+
+const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, {
+  onTranscript: appendTranscript,
+  onActive: (on, source) => {
+    meetingActive = on;
+    document.body.dataset.meeting = on ? 'on' : 'off';
+    transcriptEl.hidden = !on;
+    meetingBtn.classList.toggle('active', on && source !== 'mic');
+    meetingMicBtn.classList.toggle('active', on && source === 'mic');
+    // En mode réunion, seule la source de la réunion déclenche les tours (le micro est suspendu).
+    conversation.vad.paused = on;
+    updateHint();
+  },
+  onError: showError,
+  onLevel: (level) => {
+    if (meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
+  },
+});
+
+/** Lance/arrête le mode réunion sur une source : 🎧 onglet de visioconférence, 🎙️ micro de la pièce. */
+async function toggleMeeting(source: MeetingSource) {
+  if (meeting.active) {
+    if (meeting.currentSource === source) return meeting.stop();
+    meeting.stop(); // on bascule sur l'autre source
+  }
+  await begin();
+  if (conversation.current === 'off') return;
+  try {
+    // En mode « mic », on réutilise le micro déjà ouvert de la conversation.
+    await meeting.start(source, source === 'mic' ? conversation.vad.mediaStream : undefined);
+  } catch (err) {
+    showError(err instanceof Error ? err.message : String(err));
+  }
+}
+meetingBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  void toggleMeeting('tab');
+});
+meetingMicBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  void toggleMeeting('mic');
+});
+$('transcript-clear').addEventListener('click', () => transcriptLines.replaceChildren());
 
 // Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
 async function begin() {
@@ -424,7 +538,7 @@ $('logout').addEventListener('click', async () => {
 });
 
 dialog.addEventListener('close', () => {
-  conversation.vad.paused = false;
+  conversation.vad.paused = meetingActive;
   if (dialog.returnValue !== 'save') return void showCharacter(settings); // annule l'aperçu
   const next = readForm();
   // Une clé changée à la main n'est plus celle du compte connecté.
@@ -477,6 +591,7 @@ async function applySettings() {
   }
   try {
     const agent = await breign.getAgent();
+    agentName = agent.name;
     $('agent-name').textContent = agent.name;
   } catch (e) {
     showError(await describeError(e));
@@ -540,5 +655,5 @@ $('action-copy').addEventListener('click', async (e) => {
 
 // Accès console pour le débogage : actions('[ACTION.EMOTION.AGGRESSIVE]').
 // showMedia({ kind: 'image', url: '…', title: '…' }) montre un média comme le ferait l'agent.
-Object.assign(window, { stage, voice, conversation, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
+Object.assign(window, { stage, voice, conversation, meeting, THREE, actions: testActions, actionPrompt, showMedia, handleNativeActions, appSocketMessage });
 Object.defineProperty(window, 'avatar', { get: () => avatar });

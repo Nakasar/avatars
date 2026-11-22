@@ -70,6 +70,8 @@ export class VoiceActivity {
   onLevel?: (level: number, speaking: boolean) => void;
 
   private stream?: MediaStream;
+  /** Faux quand le stream vient de l'extérieur (ex. audio d'une réunion capturé) : on ne l'arrête pas. */
+  private ownsStream = false;
   private node?: AudioWorkletNode;
   private source?: MediaStreamAudioSourceNode;
   private sampleRate = 48000;
@@ -92,11 +94,26 @@ export class VoiceActivity {
     return Boolean(this.stream);
   }
 
-  async start() {
+  /** Le flux écouté (micro ouvert ou flux externe), pour le partager avec un second VAD. */
+  get mediaStream() {
+    return this.stream;
+  }
+
+  /**
+   * Démarre l'écoute. Sans argument, ouvre le micro ; avec un `stream` (ex. audio d'un onglet
+   * de réunion capturé par `getDisplayMedia`), l'écoute ce flux sans en être propriétaire.
+   */
+  async start(stream?: MediaStream) {
     if (this.stream) return;
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-    });
+    if (stream) {
+      this.stream = stream;
+      this.ownsStream = false;
+    } else {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      });
+      this.ownsStream = true;
+    }
     const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
     await this.ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
@@ -114,7 +131,7 @@ export class VoiceActivity {
   stop() {
     this.node?.disconnect();
     this.source?.disconnect();
-    this.stream?.getTracks().forEach((t) => t.stop());
+    if (this.ownsStream) this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = undefined;
     this.reset();
   }

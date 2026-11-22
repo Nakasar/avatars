@@ -152,6 +152,33 @@ export class Conversation {
     void this.respond(text.trim());
   }
 
+  /** Transcrit un énoncé (WAV 16 kHz) avec la configuration Breign. */
+  async transcribe(u: Utterance): Promise<string> {
+    const wav = await toWav16k(u);
+    return (await this.getBreign().speechToText(wav)).trim();
+  }
+
+  /**
+   * Mode réunion : un son vient d'être détecté sur l'audio de la réunion (VAD dédié).
+   *
+   * Contrairement au micro (une seule personne, qui parle à l'avatar), la réunion parle
+   * presque tout le temps et pas forcément à l'avatar :
+   *  - pendant qu'il réfléchit, une réponse demandée n'est jamais abandonnée ;
+   *  - pendant qu'il parle, il se tait (barge-in) — le VAD de la réunion n'émet ce cas
+   *    qu'après une prise de parole longue (`bargeInStartMs`), pas pour un « hmm ». Entre deux
+   *    phrases d'une réponse (état `speaking` sans `bargeIn`), on ne l'interrompt pas non plus.
+   */
+  noteSpeechStart(bargeIn: boolean) {
+    if (bargeIn) return this.userStarted(true);
+    if (this.state === 'speaking' || this.state === 'thinking' || this.state === 'transcribing') return;
+    this.userStarted(false);
+  }
+
+  /** Mode réunion : plus personne ne parle et rien ne s'adressait à l'avatar, on rend la main. */
+  noteSpeechEnd() {
+    if (this.state === 'user-speaking') this.userCancelled();
+  }
+
   private userStarted(bargeIn: boolean) {
     const avatar = this.getAvatar();
     if (bargeIn || this.state === 'speaking') {
@@ -189,8 +216,7 @@ export class Conversation {
     avatar?.nod();
     avatar?.setMode('thinking');
     try {
-      const wav = await toWav16k(u);
-      const text = (await breign.speechToText(wav)).trim();
+      const text = await this.transcribe(u);
       if (turn !== this.turn) return;
       if (!text) {
         this.setState('idle');

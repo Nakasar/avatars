@@ -11,6 +11,11 @@ export interface AppSettings extends BreignSettings {
   orbColor: OrbColor;
   /** Compte obtenu par « Se connecter avec Breign » (absent pour une clé collée à la main). */
   account?: BreignAccount;
+  /**
+   * Mot d'activation en mode réunion : l'avatar ne répond que quand ce mot est prononcé dans
+   * l'audio de la réunion. Vide : le nom de l'agent, sinon « breign ».
+   */
+  wakeWord: string;
 }
 
 const KEY = 'breign-avatar:settings';
@@ -38,6 +43,7 @@ export function loadSettings(): AppSettings {
     appearance: env.VITE_AVATAR_APPEARANCE === 'human' ? 'human' : 'orb',
     orbColor: isOrbColor(env.VITE_AVATAR_ORB_COLOR) ? env.VITE_AVATAR_ORB_COLOR : 'blue',
     instanceId: env.VITE_BREIGN_INSTANCE_ID || '',
+    wakeWord: env.VITE_MEETING_WAKE_WORD || '',
   };
   let stored: Partial<AppSettings> = {};
   try {
@@ -55,6 +61,7 @@ export function loadSettings(): AppSettings {
   if (q.get('model')) fromUrl.modelUrl = q.get('model')!;
   if (q.get('look') === 'orb' || q.get('look') === 'human') fromUrl.appearance = q.get('look') as Appearance;
   if (isOrbColor(q.get('color'))) fromUrl.orbColor = q.get('color') as OrbColor;
+  if (q.get('wake')) fromUrl.wakeWord = q.get('wake')!;
   const clean = (o: Partial<AppSettings>) =>
     Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== ''));
   const merged = { ...defaults, ...clean(stored), ...clean(fromUrl) } as AppSettings;
