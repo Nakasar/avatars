@@ -10,13 +10,18 @@ export interface TranscriptLine {
   text: string;
   /** Le mot d'activation y était présent : l'avatar a été appelé. */
   addressed: boolean;
+  /** C'est la voix de l'avatar lui-même (retour micro) : affiché à part, jamais déclencheur. */
+  self?: boolean;
 }
+
+/** Source audio du mode réunion : onglet de visioconférence, ou micro de l'appareil (pièce). */
+export type MeetingSource = 'tab' | 'mic';
 
 export interface MeetingEvents {
   /** Nouvelle ligne de transcription (complète, horodatée). */
   onTranscript?: (line: TranscriptLine) => void;
-  /** Le mode réunion démarre (`true`) ou s'arrête (`false`). */
-  onActive?: (active: boolean) => void;
+  /** Le mode réunion démarre (`true`) ou s'arrête (`false`), avec sa source. */
+  onActive?: (active: boolean, source?: MeetingSource) => void;
   onError?: (message: string) => void;
   /** Niveau sonore de la réunion, 0–1, pour l'indicateur visuel. */
   onLevel?: (level: number) => void;
@@ -41,11 +46,12 @@ const MAX_LINES = 200;
 const CONTEXT_LINES = 12;
 
 /**
- * Mode réunion : l'avatar devient un participant actif. Il capture l'audio d'un onglet de
- * visioconférence (`getDisplayMedia`), le découpe en énoncés (VAD), transcrit chaque énoncé
- * (STT Breign) dans un panneau, et quand le mot d'activation est prononcé (« Breign, … »),
- * il interrompt ce qu'il fait, envoie la question à l'agent (avec les dernières lignes de la
- * transcription en contexte) et répond de vive voix.
+ * Mode réunion : l'avatar devient un participant actif. Il écoute la réunion — l'audio d'un
+ * onglet de visioconférence (`getDisplayMedia`) ou le micro de l'appareil posé dans la pièce —
+ * le découpe en énoncés (VAD), transcrit chaque énoncé (STT Breign) dans un panneau, et quand
+ * le mot d'activation est prononcé (« Breign, … »), il interrompt ce qu'il fait, envoie la
+ * question à l'agent (avec les dernières lignes de la transcription en contexte) et répond de
+ * vive voix. En mode « mic », sa propre voix (retour des enceintes) est reconnue et ignorée.
  *
  * Pendant que l'avatar parle, les seuils du VAD sont relevés (barge-in) : si quelqu'un de la
  * réunion reprend la parole, l'avatar se tait aussitôt.
@@ -53,8 +59,12 @@ const CONTEXT_LINES = 12;
 export class MeetingSession {
   private vad?: VoiceActivity;
   private stream?: MediaStream;
+  private ownsStream = false;
+  private source?: MeetingSource;
   private turn = 0;
   private lines: TranscriptLine[] = [];
+  /** Ce que l'avatar vient de dire (pour reconnaître sa propre voix revenue par le micro). */
+  private agentSpeech = '';
 
   constructor(
     private voice: Voice,
@@ -77,38 +87,70 @@ export class MeetingSession {
     return Boolean(this.stream);
   }
 
+  /** Source du mode réunion en cours (`tab` ou `mic`). */
+  get currentSource() {
+    return this.source;
+  }
+
   /**
-   * Demande à l'utilisateur de partager un onglet (ou l'écran) et écoute son audio.
-   * À appeler depuis un geste utilisateur (`getDisplayMedia` l'exige).
+   * Démarre le mode réunion.
+   * - `tab` : demande à l'utilisateur de partager un onglet de visioconférence (geste requis
+   *   par `getDisplayMedia`) et écoute son audio ; la piste vidéo est coupée aussitôt.
+   * - `mic` : écoute le micro de l'appareil (PC ou téléphone posé dans la pièce). Avec
+   *   `micStream`, réutilise le micro déjà ouvert de la conversation (pas de double capture) ;
+   *   sinon ouvre son propre micro.
    */
-  async start() {
+  async start(source: MeetingSource = 'tab', micStream?: MediaStream) {
     if (this.stream) return;
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      this.events.onError?.('La capture d’onglet (getDisplayMedia) n’est pas disponible dans ce navigateur.');
-      return;
-    }
+    this.source = source;
     let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        // Chrome n'accorde l'audio d'un onglet que si la vidéo est demandée : on la coupe après.
-        video: { displaySurface: 'browser' } as MediaTrackConstraints,
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
-      });
-    } catch {
-      return; // partage annulé par l'utilisateur
+    let owns = false;
+    if (source === 'mic') {
+      if (micStream) {
+        stream = micStream;
+      } else {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+          });
+        } catch {
+          this.source = undefined;
+          this.events.onError?.('Micro indisponible : autorisez-le pour que l’avatar écoute la pièce.');
+          return;
+        }
+        owns = true;
+      }
+    } else {
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        this.source = undefined;
+        this.events.onError?.('La capture d’onglet (getDisplayMedia) n’est pas disponible dans ce navigateur.');
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          // Chrome n'accorde l'audio d'un onglet que si la vidéo est demandée : on la coupe après.
+          video: { displaySurface: 'browser' } as MediaTrackConstraints,
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+        });
+      } catch {
+        this.source = undefined;
+        return; // partage annulé par l'utilisateur
+      }
+      const audioTracks = stream.getAudioTracks();
+      if (!audioTracks.length) {
+        stream.getTracks().forEach((t) => t.stop());
+        this.source = undefined;
+        this.events.onError?.(
+          'Aucun son capturé : partagez un onglet en cochant « Partager l’audio de l’onglet », ou l’écran entier avec le son du système.',
+        );
+        return;
+      }
+      stream.getVideoTracks().forEach((t) => t.stop());
+      // Arrêt du partage depuis la barre du navigateur (« Arrêter le partage »).
+      audioTracks[0].addEventListener('ended', () => this.stop());
     }
-    const audioTracks = stream.getAudioTracks();
-    if (!audioTracks.length) {
-      stream.getTracks().forEach((t) => t.stop());
-      this.events.onError?.(
-        'Aucun son capturé : partagez un onglet en cochant « Partager l’audio de l’onglet », ou l’écran entier avec le son du système.',
-      );
-      return;
-    }
-    stream.getVideoTracks().forEach((t) => t.stop());
     this.stream = stream;
-    // Arrêt du partage depuis la barre du navigateur (« Arrêter le partage »).
-    audioTracks[0].addEventListener('ended', () => this.stop());
+    this.ownsStream = owns;
 
     const vad = (this.vad = new VoiceActivity(this.voice.ctx, MEETING_VAD));
     vad.onSpeechStart = (bargeIn) => this.conversation.noteSpeechStart(bargeIn);
@@ -121,17 +163,29 @@ export class MeetingSession {
       this.events.onError?.(`Audio de la réunion illisible : ${e instanceof Error ? e.message : e}`);
       return;
     }
-    this.events.onActive?.(true);
+    this.events.onActive?.(true, source);
   }
 
   stop() {
     const vad = this.vad;
+    const source = this.source;
     this.vad = undefined;
+    this.source = undefined;
     this.turn++;
-    vad?.stop(); // stream externe : les pistes ne sont pas arrêtées ici
-    this.stream?.getTracks().forEach((t) => t.stop());
+    vad?.stop(); // le VAD n'est jamais propriétaire du flux
+    if (this.ownsStream) this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = undefined;
-    if (vad) this.events.onActive?.(false);
+    this.ownsStream = false;
+    if (vad) this.events.onActive?.(false, source);
+  }
+
+  /** Mémorise le texte que l'avatar vient de prononcer (filtre anti-écho en mode « mic »). */
+  noteAgentText(text: string) {
+    this.agentSpeech = text.slice(-400);
+  }
+
+  private isEcho(text: string) {
+    return isEchoOf(text, this.agentSpeech);
   }
 
   /** Transcrit un énoncé de la réunion ; appelle l'avatar si le mot d'activation est présent. */
@@ -154,12 +208,15 @@ export class MeetingSession {
       if (turn === this.turn) this.conversation.noteSpeechEnd();
       return;
     }
-    const hit = findWakeWord(text, this.getWakeWord());
-    const line: TranscriptLine = { time: timestamp(), text, addressed: Boolean(hit) };
+    // En mode « mic », l'appareil peut entendre sa propre voix (enceintes) : on la reconnaît
+    // au chevauchement de mots avec ce que l'avatar vient de dire, et elle ne déclenche rien.
+    const self = this.isEcho(text);
+    const hit = self ? null : findWakeWord(text, this.getWakeWord());
+    const line: TranscriptLine = { time: timestamp(), text, addressed: Boolean(hit), self };
     this.lines.push(line);
     if (this.lines.length > MAX_LINES) this.lines.shift();
     this.events.onTranscript?.(line);
-    if (!hit) {
+    if (self || !hit) {
       this.conversation.noteSpeechEnd();
       return;
     }
@@ -176,6 +233,18 @@ export class MeetingSession {
 
 function timestamp(): string {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/**
+ * Vrai si `text` ressemble à ce que l'avatar vient de dire (≥ 70 % de mots communs, 4 mots
+ * minimum) : c'est probablement sa propre voix revenue par le micro de la pièce.
+ */
+export function isEchoOf(text: string, agentSpeech: string): boolean {
+  const words = normalizeForMatch(text).split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  if (words.length < 4 || !agentSpeech) return false;
+  const spoken = new Set(normalizeForMatch(agentSpeech).split(/[^a-z0-9]+/));
+  const hits = words.filter((w) => spoken.has(w)).length;
+  return hits / words.length >= 0.7;
 }
 
 /**

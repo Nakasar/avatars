@@ -94,6 +94,11 @@ export class VoiceActivity {
     return Boolean(this.stream);
   }
 
+  /** Le flux écouté (micro ouvert ou flux externe), pour le partager avec un second VAD. */
+  get mediaStream() {
+    return this.stream;
+  }
+
   /**
    * Démarre l'écoute. Sans argument, ouvre le micro ; avec un `stream` (ex. audio d'un onglet
    * de réunion capturé par `getDisplayMedia`), l'écoute ce flux sans en être propriétaire.

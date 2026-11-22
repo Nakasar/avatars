@@ -170,7 +170,9 @@ body[data-state='off'] .presence { opacity: 0; }
 }
 
 /* Mode réunion : bouton actif + panneau de transcription */
-#meeting-btn.active { background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+#meeting-btn.active, #meeting-mic-btn.active {
+  background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent);
+}
 .transcript {
   position: fixed; right: 16px; top: 68px; width: min(360px, 40vw); max-height: 62vh;
   display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 16px;
@@ -188,6 +190,7 @@ body[data-state='off'] .presence { opacity: 0; }
 .transcript-line { margin: 0; font-size: 13px; line-height: 1.4; }
 .transcript-line time { color: var(--muted); font-size: 11px; margin-right: 8px; font-variant-numeric: tabular-nums; }
 .transcript-line.addressed { color: var(--accent); }
+.transcript-line.self { opacity: 0.5; font-style: italic; }
 @media (max-width: 720px) {
   .transcript { right: 16px; left: 16px; top: auto; bottom: 190px; width: auto; max-height: 30vh; }
 }

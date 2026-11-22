@@ -6,7 +6,7 @@ import { Orb, ORB_PALETTES } from './orb/Orb';
 import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
-import { MeetingSession, type TranscriptLine } from './conversation/Meeting';
+import { MeetingSession, type MeetingSource, type TranscriptLine } from './conversation/Meeting';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
@@ -280,7 +280,10 @@ const conversation = new Conversation(voice, () => breign, () => avatar, {
     updateHint(s);
   },
   onUserText: (text) => caption('user', text),
-  onAgentText: (text) => caption('agent', text || '…'),
+  onAgentText: (text) => {
+    caption('agent', text || '…');
+    meeting.noteAgentText(text); // pour filtrer l'écho de sa propre voix en mode réunion « mic »
+  },
   onError: (msg) => showError(msg),
   onLevel: (level) => {
     if (!meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
@@ -312,6 +315,7 @@ function showError(msg: string) {
 
 // ---------------------------------------------------------------- Mode réunion (companion)
 const meetingBtn = $('meeting-btn');
+const meetingMicBtn = $('meeting-mic-btn');
 const transcriptEl = $('transcript');
 const transcriptLines = $('transcript-lines');
 
@@ -321,14 +325,21 @@ function wakeWord() {
 }
 
 function updateHint(s: ConversationState = conversation.current) {
-  $('hint').textContent = meetingActive
-    ? `Mode réunion : je transcris, et je réponds quand on m’appelle « ${wakeWord()} »`
-    : STATE_LABEL[s];
+  if (!meetingActive) {
+    $('hint').textContent = STATE_LABEL[s];
+    return;
+  }
+  const src =
+    meeting.currentSource === 'mic'
+      ? 'le micro de cet appareil écoute la pièce'
+      : 'j’écoute l’onglet partagé';
+  $('hint').textContent = `Mode réunion : ${src} — je transcris, et je réponds quand on m’appelle « ${wakeWord()} »`;
 }
 
 function appendTranscript(line: TranscriptLine) {
   const p = document.createElement('p');
-  p.className = 'transcript-line' + (line.addressed ? ' addressed' : '');
+  p.className =
+    'transcript-line' + (line.addressed ? ' addressed' : '') + (line.self ? ' self' : '');
   const time = document.createElement('time');
   time.textContent = line.time;
   p.append(time, document.createTextNode(line.text));
@@ -339,12 +350,13 @@ function appendTranscript(line: TranscriptLine) {
 
 const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, {
   onTranscript: appendTranscript,
-  onActive: (on) => {
+  onActive: (on, source) => {
     meetingActive = on;
     document.body.dataset.meeting = on ? 'on' : 'off';
     transcriptEl.hidden = !on;
-    meetingBtn.classList.toggle('active', on);
-    // En mode réunion, seul l'audio de la réunion déclenche les tours (le micro est suspendu).
+    meetingBtn.classList.toggle('active', on && source !== 'mic');
+    meetingMicBtn.classList.toggle('active', on && source === 'mic');
+    // En mode réunion, seule la source de la réunion déclenche les tours (le micro est suspendu).
     conversation.vad.paused = on;
     updateHint();
   },
@@ -354,13 +366,28 @@ const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, 
   },
 });
 
+/** Lance/arrête le mode réunion sur une source : 🎧 onglet de visioconférence, 🎙️ micro de la pièce. */
+async function toggleMeeting(source: MeetingSource) {
+  if (meeting.active) {
+    if (meeting.currentSource === source) return meeting.stop();
+    meeting.stop(); // on bascule sur l'autre source
+  }
+  await begin();
+  if (conversation.current === 'off') return;
+  try {
+    // En mode « mic », on réutilise le micro déjà ouvert de la conversation.
+    await meeting.start(source, source === 'mic' ? conversation.vad.mediaStream : undefined);
+  } catch (err) {
+    showError(err instanceof Error ? err.message : String(err));
+  }
+}
 meetingBtn.addEventListener('click', (e) => {
   e.stopPropagation();
-  if (meeting.active) return meeting.stop();
-  void begin().then(() => {
-    if (conversation.current === 'off') return;
-    meeting.start().catch((err) => showError(err instanceof Error ? err.message : String(err)));
-  });
+  void toggleMeeting('tab');
+});
+meetingMicBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  void toggleMeeting('mic');
 });
 $('transcript-clear').addEventListener('click', () => transcriptLines.replaceChildren());
 

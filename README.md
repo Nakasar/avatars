@@ -128,18 +128,27 @@ bouton n'est nécessaire :
 
 ## Mode réunion : companion actif
 
-Le bouton 🎧 (haut à droite) transforme l'avatar en participant de la visioconférence :
+Deux boutons en haut à droite transforment l'avatar en participant de la réunion :
 
-1. le navigateur demande de **partager un onglet** (celui de la réunion, avec « partager
-   l'audio de l'onglet ») — la piste vidéo, exigée par Chrome, est aussitôt coupée ;
-2. l'audio de la réunion passe par le même VAD que le micro (`conversation/VoiceActivity.ts`,
-   avec un stream externe) : chaque énoncé est découpé, transcrit (STT Breign) et **affiché
-   en direct dans le panneau « Transcription »**, horodaté ;
-3. quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
-   la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
-   dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
-4. si quelqu'un parle pendant que l'avatar répond, il se tait aussitôt (barge-in, mêmes seuils
-   relevés que pour le micro).
+- **🎧 réunion en ligne** : le navigateur demande de **partager un onglet** (celui de la
+  visioconférence, avec « partager l'audio de l'onglet ») — la piste vidéo, exigée par Chrome,
+  est aussitôt coupée ;
+- **🎙️ réunion physique** : le **micro de l'appareil** (PC ou téléphone posé dans la pièce)
+  écoute la pièce ; sur téléphone, servez la page en HTTPS (Vercel) et montez le volume pour
+  que l'avatar se fasse entendre. Sa propre voix, revenue par les enceintes, est reconnue
+  (chevauchement de mots avec ce qu'il vient de dire) et affichée à part sans jamais déclencher
+  de réponse — l'annulation d'écho du navigateur fait le gros du travail.
+
+Dans les deux cas :
+
+- l'audio de la réunion passe par le même VAD que le micro (`conversation/VoiceActivity.ts`,
+  avec un stream externe) : chaque énoncé est découpé, transcrit (STT Breign) et **affiché
+  en direct dans le panneau « Transcription »**, horodaté ;
+- quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
+  la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
+  dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
+- si quelqu'un parle pendant que l'avatar répond, il se tait aussitôt (barge-in, mêmes seuils
+  relevés que pour le micro).
 
 En mode réunion, le micro ne déclenche plus de tour : seule la réunion est écoutée (la saisie
 au clavier `/` reste possible). Le mot d'activation se règle dans les réglages (⚙), par
@@ -233,7 +242,10 @@ Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. L
   n'est pas annulée sur le serveur, seulement ignorée).
 - La détection de voix se base sur l'énergie : dans une pièce très bruyante, un modèle de VAD
   neuronal (Silero) serait plus fiable. Les seuils sont réglables dans `DEFAULT_VAD`.
-- En mode réunion, partagez **l'onglet de la visioconférence**, pas l'écran entier : avec le son
-  du système, la voix de l'avatar elle-même peut être recapturée (les seuils de barge-in
-  atténuent la boucle, sans la supprimer). `getDisplayMedia` exige un geste utilisateur et un
-  contexte sécurisé (HTTPS ou localhost).
+- En mode réunion en ligne, partagez **l'onglet de la visioconférence**, pas l'écran entier :
+  avec le son du système, la voix de l'avatar elle-même peut être recapturée (les seuils de
+  barge-in atténuent la boucle, sans la supprimer). `getDisplayMedia` exige un geste utilisateur
+  et un contexte sécurisé (HTTPS ou localhost).
+- En réunion physique (🎙️), posez l'appareil **près de la table** et pas à côté des enceintes
+  de l'avatar : l'annulation d'écho du navigateur + le filtre anti-écho (70 % de mots communs
+  avec la dernière réponse) évitent la boucle, mais un pièce très sonore reste difficile.
