@@ -334,7 +334,9 @@ export class Conversation {
     this.interrupt();
     this.replyStarted(moodOf(stripActions(text)));
     this.events.onAgentText?.(stripActions(text, true), true);
-    this.voice.say(text);
+    // Phrase par phrase : la première est synthétisée et dite sans attendre les suivantes
+    // (une seule synthèse pour toute la réponse arrivait en un bloc, après un long silence).
+    for (const sentence of new SentenceChunker().push(text, true)) this.voice.say(sentence);
   }
 
   /**

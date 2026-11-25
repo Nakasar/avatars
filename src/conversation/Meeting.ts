@@ -115,6 +115,8 @@ export class MeetingSession {
   /** Réponse dite par la voix de Breign en cours (pour regrouper ses phrases). */
   private audioReply?: string;
   private lastAudioAt = 0;
+  /** Dernier morceau `agent.audio` reçu (sans identifiant, regroupe les morceaux rapprochés). */
+  private lastChunkAt = 0;
 
   constructor(
     private voice: Voice,
@@ -465,10 +467,20 @@ export class MeetingSession {
     const src = agentAudioSrc(f);
     const text = String(f.text ?? (f.audio as { text?: string } | undefined)?.text ?? '');
     if (!src && !text) return console.warn('[meeting] trame agent.audio illisible', f);
+    console.info('[meeting] agent.audio', describeFrame(f));
     // Une nouvelle réponse : autre message, première phrase, ou l'avatar avait fini de parler.
-    const key = String(f.messageId ?? f.wakeupId ?? f.replyId ?? f.seq ?? '');
-    const starts = f.sequence === 0 || (key ? key !== this.audioReply : !this.voice.busy);
+    // Les morceaux suivants d'une réponse en cours s'ajoutent à la file, sans couper le
+    // précédent (seul un identifiant de *réponse* compte, pas celui d'un morceau).
+    const key = String(f.messageId ?? f.wakeupId ?? f.replyId ?? f.turnId ?? '');
+    const sequence = typeof f.sequence === 'number' ? f.sequence : undefined;
+    const starts =
+      sequence !== undefined
+        ? sequence === 0 && !(key && key === this.audioReply && this.voice.busy)
+        : key
+          ? key !== this.audioReply
+          : !this.voice.busy && Date.now() - this.lastChunkAt > 1500;
     this.audioReply = key || undefined;
+    this.lastChunkAt = Date.now();
     this.conversation.speakPrepared(text, src, starts);
   }
 
@@ -491,6 +503,16 @@ export class MeetingSession {
       console.warn('[meeting] état de la réunion illisible', e);
     }
   }
+}
+
+/** Trame `agent.audio` résumée pour la console (sans l'audio en base64). */
+function describeFrame(f: TranscriptFrame) {
+  const short = (v: unknown) => (typeof v === 'string' && v.length > 120 ? `${v.slice(0, 40)}… (${v.length} car.)` : v);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(f)) {
+    out[k] = v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([a, b]) => [a, short(b)])) : short(v);
+  }
+  return out;
 }
 
 /** Source jouable de l'audio d'une trame `agent.audio` (URL, data URL ou blob WAV). */
