@@ -3,12 +3,15 @@ import { AuthApi, Configuration, UsersApi, type ConfigurationParameters } from '
 /**
  * « Se connecter avec Breign » : deux flux, selon le client OAuth utilisé.
  *
- * **Client d'organisation** (`VITE_BREIGN_OAUTH_CLIENT_ID`, client public déclaré dans l'écran
- * Applications de Breign) : fournisseur OAuth 2.1 / OpenID Connect de Breign.
+ * **Client d'organisation** (saisi dans les réglages ⚙, ou par défaut `VITE_BREIGN_OAUTH_CLIENT_ID`,
+ * client déclaré dans l'écran Applications de l'organisation Breign) : fournisseur OAuth 2.1 /
+ * OpenID Connect de Breign. Le client choisit l'organisation : un même déploiement se connecte
+ * ainsi à n'importe quelle organisation, selon le client saisi par l'utilisateur.
  *   1. `GET {API}/rp/auth/oauth2/authorize?…&scope=openid profile email offline_access breign&resource={API}`
  *      (PKCE S256, `redirect_uri` HTTPS déclaré dans les `redirectUris` du client) ;
  *   2. retour sur `/callback?code=…&state=…` ;
- *   3. `POST {API}/rp/auth/oauth2/token` (`resource` obligatoire, pas de secret) : `access_token`
+ *   3. `POST {API}/rp/auth/oauth2/token` (`resource` obligatoire ; `client_secret` seulement pour
+ *      un client confidentiel, envoyé depuis ce navigateur) : `access_token`
  *      JWT d'une heure, passé en `Authorization: Bearer`, et `refresh_token` rotatif de 30 jours.
  *
  * **Sans client d'organisation** : le flux des applications de bureau de Breign (`breign login`),
@@ -16,16 +19,32 @@ import { AuthApi, Configuration, UsersApi, type ConfigurationParameters } from '
  *   `GET /auth/authorize` puis `POST /auth/token`, qui renvoie une clé API de l'utilisateur.
  */
 
-/** Client OAuth d'organisation. Vide : le client de la CLI, en local seulement. */
-const ORG_CLIENT_ID: string = import.meta.env.VITE_BREIGN_OAUTH_CLIENT_ID || '';
 const DESKTOP_CLIENT_ID = 'breign-cli';
-export const OAUTH_CLIENT_ID = ORG_CLIENT_ID || DESKTOP_CLIENT_ID;
 /** Scopes du fournisseur OIDC ; `breign` est nécessaire pour appeler l'API. */
 const OIDC_SCOPE = 'openid profile email offline_access breign';
 export const CALLBACK_PATH = '/callback';
 
 const PENDING_KEY = 'breign-avatar:oauth-pending';
 const SESSION_KEY = 'breign-avatar:oidc-session';
+
+/**
+ * Ce qu'il faut pour se connecter : l'URL de l'API et le client OAuth de l'organisation, tels
+ * que réglés dans ⚙ (valeurs par défaut : variables `VITE_BREIGN_OAUTH_*`).
+ */
+export interface OAuthSettings {
+  basePath: string;
+  /** Client OAuth de l'organisation. Vide : le client de la CLI, en local seulement. */
+  oauthClientId?: string;
+  /** Secret du client, pour un client confidentiel. Vide pour un client public (PKCE seul). */
+  oauthClientSecret?: string;
+  /** Paramètre `resource` ; vide : l'URL de l'API (ou `VITE_BREIGN_OAUTH_RESOURCE`). */
+  oauthResource?: string;
+}
+
+/** Client d'organisation en cours, sans espaces parasites. */
+function orgClient(s: OAuthSettings) {
+  return { id: (s.oauthClientId ?? '').trim(), secret: (s.oauthClientSecret ?? '').trim() };
+}
 
 export interface BreignAccount {
   keyId?: string;
@@ -43,6 +62,9 @@ export interface BreignLogin extends BreignAccount {
 
 interface Pending {
   flow: 'oidc' | 'desktop';
+  clientId: string;
+  clientSecret?: string;
+  resource: string;
   state: string;
   verifier: string;
   basePath: string;
@@ -58,16 +80,19 @@ interface OidcSession {
   expiresAt: number;
   basePath: string;
   resource: string;
+  /** Client qui a ouvert la session (nécessaire au renouvellement). */
+  clientId: string;
+  clientSecret?: string;
 }
 
 /**
  * Valeur du paramètre `resource` (obligatoire) : l'URL de l'API, telle qu'indiquée dans
  * l'encadré Intégration de l'écran Applications de Breign.
  */
-function oidcResource(basePath: string) {
-  const env = import.meta.env.VITE_BREIGN_OAUTH_RESOURCE;
-  if (env) return env.replace(/\/$/, '');
-  const base = apiBase(basePath);
+function oidcResource(s: OAuthSettings) {
+  const own = (s.oauthResource ?? '').trim() || import.meta.env.VITE_BREIGN_OAUTH_RESOURCE;
+  if (own) return own.replace(/\/$/, '');
+  const base = apiBase(s.basePath);
   return /^https?:\/\//i.test(base) ? base : 'https://api.breign.eu';
 }
 
@@ -75,26 +100,28 @@ function oidcResource(basePath: string) {
  * Comme la CLI, le retour se fait sur `127.0.0.1` (RFC 8252 §8.3 préfère l'IP à `localhost`).
  * Depuis `localhost`, on bascule d'abord sur `127.0.0.1` (même port), puis la connexion reprend.
  */
-export function needsLoopbackIp() {
-  return !ORG_CLIENT_ID && (location.hostname === 'localhost' || location.hostname === '[::1]');
+export function needsLoopbackIp(s: OAuthSettings) {
+  return !orgClient(s).id && (location.hostname === 'localhost' || location.hostname === '[::1]');
 }
 
 /** Lance la connexion : le navigateur quitte la page pour l'écran de consentement Breign. */
-export async function startLogin(basePath: string) {
-  if (needsLoopbackIp()) {
+export async function startLogin(s: OAuthSettings) {
+  const { basePath } = s;
+  const client = orgClient(s);
+  if (needsLoopbackIp(s)) {
     const url = new URL(location.href);
     url.hostname = '127.0.0.1';
     url.searchParams.set('login', '1');
     location.replace(url);
     return;
   }
-  const flow: Pending['flow'] = ORG_CLIENT_ID ? 'oidc' : 'desktop';
+  const flow: Pending['flow'] = client.id ? 'oidc' : 'desktop';
   if (flow === 'desktop' && location.hostname !== '127.0.0.1') {
     // Le client de la CLI n'accepte que les retours loopback : Breign répondrait
     // « Invalid authorization request » sur une page JSON. On prévient plutôt ici.
     throw new Error(
-      'Connexion Breign indisponible sur ce site : il faut un client OAuth d’organisation déclaré pour ' +
-        `${location.origin}${CALLBACK_PATH} (VITE_BREIGN_OAUTH_CLIENT_ID). En attendant, utilisez une clé API dans les réglages.`,
+      'Connexion Breign : renseignez dans les réglages le client OAuth de votre organisation (écran ' +
+        `Applications de Breign, avec ${location.origin}${CALLBACK_PATH} parmi ses adresses de retour), ou utilisez une clé API.`,
     );
   }
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -103,8 +130,12 @@ export async function startLogin(basePath: string) {
   );
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
   const redirectUri = `${location.protocol}//${location.host}${CALLBACK_PATH}`;
+  const resource = oidcResource(s);
   const pending: Pending = {
     flow,
+    clientId: client.id || DESKTOP_CLIENT_ID,
+    clientSecret: client.secret || undefined,
+    resource,
     state,
     verifier,
     basePath,
@@ -117,7 +148,7 @@ export async function startLogin(basePath: string) {
   // l'écran de consentement traverse alors le proxy, sans souci.
   const common = {
     response_type: 'code',
-    client_id: OAUTH_CLIENT_ID,
+    client_id: pending.clientId,
     redirect_uri: redirectUri,
     code_challenge: challenge,
     code_challenge_method: 'S256',
@@ -129,7 +160,7 @@ export async function startLogin(basePath: string) {
       : new URL(`${apiBase(basePath)}/auth/authorize`, location.href);
   url.search = new URLSearchParams(
     flow === 'oidc'
-      ? { ...common, scope: OIDC_SCOPE, resource: oidcResource(basePath) }
+      ? { ...common, scope: OIDC_SCOPE, resource }
       : { ...common, device_name: deviceName() },
   ).toString();
   location.assign(url);
@@ -165,16 +196,16 @@ export async function completeLogin(): Promise<BreignLogin | null> {
   if (q.get('state') !== pending.state) throw new Error('Connexion Breign refusée : état invalide.');
 
   if (pending.flow === 'oidc') {
-    const resource = oidcResource(pending.basePath);
-    const body = await tokenRequest(pending.basePath, {
+    const { resource, clientId, clientSecret } = pending;
+    const body = await tokenRequest(pending.basePath, clientSecret, {
       grant_type: 'authorization_code',
-      client_id: OAUTH_CLIENT_ID,
+      client_id: clientId,
       code,
       redirect_uri: pending.redirectUri,
       code_verifier: pending.verifier,
       resource,
     });
-    saveSession(toSession(body, pending.basePath, resource));
+    saveSession(toSession(body, pending, resource));
     const claims = jwtClaims(body.id_token) ?? jwtClaims(body.access_token) ?? {};
     return {
       apiKey: '',
@@ -260,13 +291,13 @@ export async function accessToken(): Promise<string | null> {
 
 async function refresh(session: OidcSession): Promise<OidcSession | null> {
   try {
-    const body = await tokenRequest(session.basePath, {
+    const body = await tokenRequest(session.basePath, session.clientSecret, {
       grant_type: 'refresh_token',
-      client_id: OAUTH_CLIENT_ID,
+      client_id: session.clientId,
       refresh_token: session.refreshToken!,
       resource: session.resource,
     });
-    const next = toSession(body, session.basePath, session.resource, session.refreshToken);
+    const next = toSession(body, session, session.resource, session.refreshToken);
     saveSession(next);
     return next;
   } catch (e) {
@@ -276,7 +307,13 @@ async function refresh(session: OidcSession): Promise<OidcSession | null> {
   }
 }
 
-async function tokenRequest(basePath: string, params: Record<string, string>) {
+/**
+ * Point de jeton. Un client confidentiel s'authentifie par `client_secret` dans le corps
+ * (`client_secret_post`) : le secret part de ce navigateur, directement (ou via le relais
+ * `/breign-api`, qui ne le garde pas).
+ */
+async function tokenRequest(basePath: string, clientSecret: string | undefined, params: Record<string, string>) {
+  if (clientSecret) params = { ...params, client_secret: clientSecret };
   const res = await fetch(new URL(`${apiBase(basePath)}/rp/auth/oauth2/token`, location.href), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
@@ -293,7 +330,7 @@ async function tokenRequest(basePath: string, params: Record<string, string>) {
 
 function toSession(
   body: { access_token: string; refresh_token?: string; expires_in?: number },
-  basePath: string,
+  from: { basePath: string; clientId: string; clientSecret?: string },
   resource: string,
   previousRefresh?: string,
 ): OidcSession {
@@ -301,14 +338,19 @@ function toSession(
     accessToken: body.access_token,
     refreshToken: body.refresh_token ?? previousRefresh,
     expiresAt: Date.now() + (body.expires_in ?? 3600) * 1000,
-    basePath,
+    basePath: from.basePath,
     resource,
+    clientId: from.clientId,
+    clientSecret: from.clientSecret,
   };
 }
 
 function loadSession(): OidcSession | null {
   try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null');
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null') as OidcSession | null;
+    // Sessions ouvertes avant le choix du client dans les réglages : client de l'époque.
+    if (s && !s.clientId) s.clientId = import.meta.env.VITE_BREIGN_OAUTH_CLIENT_ID || DESKTOP_CLIENT_ID;
+    return s;
   } catch {
     return null;
   }
@@ -322,7 +364,12 @@ function saveSession(s: OidcSession) {
   }
 }
 
-function clearSession() {
+/** Client de la session OIDC en cours, pour savoir si elle vaut encore après un changement. */
+export function sessionClientId(): string | null {
+  return loadSession()?.clientId ?? null;
+}
+
+export function clearSession() {
   try {
     localStorage.removeItem(SESSION_KEY);
   } catch {

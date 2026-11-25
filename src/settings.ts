@@ -1,9 +1,9 @@
 import type { BreignSettings } from './breign/BreignService';
-import type { BreignAccount } from './breign/oauth';
+import type { BreignAccount, OAuthSettings } from './breign/oauth';
 import type { Appearance } from './avatar/Character';
 import { isOrbColor, type OrbColor } from './orb/Orb';
 
-export interface AppSettings extends BreignSettings {
+export interface AppSettings extends BreignSettings, OAuthSettings {
   modelUrl: string;
   /** Apparence du bot : humain 3D ou orbe IA. */
   appearance: Appearance;
@@ -44,6 +44,11 @@ export function loadSettings(): AppSettings {
     orbColor: isOrbColor(env.VITE_AVATAR_ORB_COLOR) ? env.VITE_AVATAR_ORB_COLOR : 'blue',
     instanceId: env.VITE_BREIGN_INSTANCE_ID || '',
     meetingVoice: env.VITE_MEETING_VOICE === 'off' ? 'off' : 'on',
+    // Organisation Breign : client OAuth saisi dans ⚙ ; les variables ne sont que des valeurs par
+    // défaut. Pas de secret par défaut : une variable VITE_* serait publiée dans le bundle.
+    oauthClientId: env.VITE_BREIGN_OAUTH_CLIENT_ID || '',
+    oauthClientSecret: '',
+    oauthResource: '',
   };
   let stored: Partial<AppSettings> = {};
   try {
