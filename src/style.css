@@ -212,3 +212,4 @@ body[data-state='off'] .presence { opacity: 0; }
 .account .org-box { padding: 8px 10px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; }
 .account .org-box label { margin-bottom: 8px; }
 .account .org-box code { user-select: all; }
+dialog select:disabled { opacity: 0.5; }

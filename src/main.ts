@@ -547,7 +547,11 @@ function readForm(): AppSettings {
 }
 
 function openSettings(message?: string) {
+  // Les listes gardent la valeur enregistrée le temps que Breign réponde.
+  fillSelect($<HTMLSelectElement>('app-list'), null, settings.appId ?? '');
+  fillSelect($<HTMLSelectElement>('instance-list'), null, settings.instanceId ?? '');
   fillForm();
+  void loadApps();
   renderAccount();
   conversation.vad.paused = true;
   if (!dialog.open) dialog.showModal();
@@ -639,7 +643,71 @@ $('load-agents').addEventListener('click', async () => {
 $<HTMLSelectElement>('agent-list').addEventListener('change', (e) => {
   const v = (e.target as HTMLSelectElement).value;
   if (v) (form.elements.namedItem('agentId') as HTMLInputElement).value = v;
+  void loadApps();
 });
+(form.elements.namedItem('agentId') as HTMLInputElement).addEventListener('change', () => void loadApps());
+$<HTMLSelectElement>('app-list').addEventListener('change', () => void loadInstances());
+
+/**
+ * Remplit une liste déroulante des réglages. La valeur en cours reste choisie ; si Breign ne la
+ * connaît pas (ou n'a pas répondu), elle est gardée telle quelle avec la mention de son id.
+ */
+function fillSelect(select: HTMLSelectElement, items: { id: string; name: string }[] | null, current: string) {
+  const empty = select.options[0];
+  select.replaceChildren(empty);
+  for (const it of items ?? []) select.add(new Option(it.name || it.id, it.id));
+  if (current && !(items ?? []).some((it) => it.id === current)) {
+    select.add(new Option(items ? `${current} (introuvable)` : current, current));
+  }
+  select.value = current;
+}
+
+let appsRequest = 0;
+/** Applications de l'agent saisi, lues dans Breign, puis ses instances. */
+async function loadApps() {
+  const draft = readForm();
+  const select = $<HTMLSelectElement>('app-list');
+  const status = $('app-status');
+  const req = ++appsRequest;
+  if (!isSignedIn(draft) || !draft.agentId) {
+    fillSelect(select, null, draft.appId ?? '');
+    status.textContent = draft.agentId ? '' : 'Choisissez d’abord un agent.';
+    return loadInstances();
+  }
+  status.textContent = 'Chargement…';
+  try {
+    const apps = await new BreignService(draft as BreignSettings).listApps(draft.agentId);
+    if (req !== appsRequest) return;
+    // Une seule application : elle est choisie d'office la première fois.
+    const current = draft.appId || (apps.length === 1 && !settings.appId ? apps[0].id : '');
+    fillSelect(select, apps, current);
+    status.textContent = apps.length ? '' : 'Cet agent n’a pas d’application.';
+  } catch (e) {
+    if (req !== appsRequest) return;
+    fillSelect(select, null, draft.appId ?? '');
+    status.textContent = `Liste indisponible : ${await describeError(e)}`;
+  }
+  return loadInstances();
+}
+
+let instancesRequest = 0;
+async function loadInstances() {
+  const draft = readForm();
+  const select = $<HTMLSelectElement>('instance-list');
+  const req = ++instancesRequest;
+  select.disabled = !draft.appId;
+  if (!draft.appId || !isSignedIn(draft)) return fillSelect(select, null, draft.appId ? draft.instanceId ?? '' : '');
+  try {
+    const instances = await new BreignService(draft as BreignSettings).listInstances(draft.appId);
+    if (req !== instancesRequest) return;
+    // L'instance par défaut a déjà son entrée (valeur vide).
+    const listed = instances.filter((i) => i.id !== 'DEFAULT');
+    const current = draft.instanceId === 'DEFAULT' ? '' : draft.instanceId ?? '';
+    fillSelect(select, listed, current);
+  } catch {
+    if (req === instancesRequest) fillSelect(select, null, draft.instanceId ?? '');
+  }
+}
 
 $('demo').addEventListener('click', () => {
   voice.unlock();
