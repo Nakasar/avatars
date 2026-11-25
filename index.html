@@ -109,11 +109,11 @@
           <select id="agent-list" hidden></select>
         </label>
         <label>Application (avatar) — optionnel
-          <input name="appId" placeholder="id de l’application, pour la voix Breign" />
-          <small>Sans application, la voix du navigateur est utilisée.</small>
+          <select name="appId" id="app-list"><option value="">— aucune : voix du navigateur —</option></select>
+          <small>Les applications de l’agent choisi, lues dans Breign. Sans application, la voix du navigateur est utilisée. <span id="app-status"></span></small>
         </label>
         <label>Instance de l’application — optionnel
-          <input name="instanceId" placeholder="id de l’instance (vide : instance par défaut)" />
+          <select name="instanceId" id="instance-list"><option value="">— instance par défaut —</option></select>
           <small>Avec une application, l’avatar répond par sa web socket (voix, images, actions de Breign). Une instance par appareil : un autre onglet sur la même instance la déconnecte. <span id="socket-status"></span></small>
         </label>
         <label>Langue

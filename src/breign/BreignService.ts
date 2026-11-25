@@ -179,6 +179,17 @@ export class BreignService {
     return this.agents.getAgents(undefined, undefined, 1, 100);
   }
 
+  /** Applications (avatars) de l'agent, pour le choix dans les réglages. */
+  async listApps(agentId = this.settings.agentId): Promise<{ id: string; name: string }[]> {
+    const apps = await this.apps.getAppsForAgentId(agentId);
+    return apps.map((a) => ({ id: a.id, name: a.name }));
+  }
+
+  /** Instances d'une application, pour le choix dans les réglages. */
+  async listInstances(appId: string): Promise<{ id: string; name: string }[]> {
+    return this.apps.getInstancesForAppId(appId);
+  }
+
   async getAgent(): Promise<AgentUio> {
     return this.agents.getAgentById(this.settings.agentId);
   }
