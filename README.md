@@ -158,8 +158,13 @@ compte rendu final. L'avatar :
 - affiche la **transcription en direct** dans le panneau « Réunion » (texte provisoire, puis
   segments horodatés avec le locuteur quand le modèle le donne) ; les phrases qui ont réveillé
   l'agent sont surlignées, celles qu'il a jugées non adressées sont estompées ;
-- **dit les réponses de l'agent** à voix haute (réglage « Réponses en réunion »), avec la voix de
-  l'application ; quelqu'un qui prend vraiment la parole (près d'une seconde) le fait taire ;
+- **dit les réponses de l'agent** à voix haute (réglage « Réponses en réunion ») : quand l'agent
+  a une **app qui lui prête sa voix** (`meetingConfiguration.voiceAppId`, dans les réglages du
+  mode réunion de l'agent sur Breign), Breign synthétise lui-même les réponses et les envoie sur
+  le WebSocket de la réunion (trames `agent.audio`) ; l'avatar joue cet audio tel quel, avec le
+  lip-sync sur le son. Sans cette app (aucune `agent.audio` reçue 2,5 s après la réponse), il
+  les synthétise avec la voix de l'application réglée ici. Quelqu'un qui prend vraiment la
+  parole (près d'une seconde) le fait taire ;
 - en 🎙️, envoie du silence pendant qu'il parle : sa propre voix ne rentre pas dans la
   transcription (sauf si on lui coupe la parole) ;
 - montre les **notes et points clés** (section « Notes » du panneau) ;
@@ -265,5 +270,7 @@ Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. L
   avec le son du système, la voix de l'avatar elle-même serait transcrite. Les participants
   distants n'entendent pas l'avatar (il ne rejoint pas l'appel). `getDisplayMedia` exige un
   geste utilisateur et un contexte sécurisé (HTTPS ou localhost).
+- Le format de la trame `agent.audio` n'est pas documenté : l'avatar accepte une URL
+  (`audio.src`, `src`, `url`) ou de l'audio en base64 (`audio.data`), encodé ou PCM16 brut.
 - Les champs de la trame `avatar.turn` ne sont pas documentés : l'avatar lit `messageId` et
   `text` s'ils sont présents, et reste tolérant sinon.

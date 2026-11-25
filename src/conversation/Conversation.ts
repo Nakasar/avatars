@@ -337,6 +337,29 @@ export class Conversation {
     this.voice.say(text);
   }
 
+  /**
+   * Fait dire une phrase dont l'audio vient de Breign (trame `agent.audio` du mode réunion) :
+   * l'audio est joué tel quel, le lip-sync suit le son. `startsReply` ouvre une nouvelle
+   * réponse (l'avatar se tait d'abord et passe en mode parole).
+   */
+  speakPrepared(text: string, audioSrc: string | undefined, startsReply: boolean) {
+    if (startsReply) {
+      this.interrupt();
+      this.replyStarted(moodOf(stripActions(text)));
+      this.spoken = [];
+    }
+    this.voice.sayPrepared({
+      text,
+      audioSrc,
+      onStart: () => {
+        const clean = stripActions(text, true).trim();
+        if (clean) this.spoken.push(clean);
+        this.events.onAgentText?.(this.spoken.join(' '), true);
+      },
+    });
+  }
+  private spoken: string[] = [];
+
   private userStarted(bargeIn: boolean) {
     this.startSending();
     const avatar = this.getAvatar();

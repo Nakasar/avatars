@@ -2,7 +2,8 @@ import type { MeetingSegmentUio, MeetingUio, TranscriptionSessionUio } from '@br
 import type { Voice } from '../avatar/Voice';
 import type { BreignService } from '../breign/BreignService';
 import { describeError } from '../breign/BreignService';
-import { TranscriptionStream } from '../breign/TranscriptionStream';
+import { TranscriptionStream, type TranscriptFrame } from '../breign/TranscriptionStream';
+import { encodeWav } from './VoiceActivity';
 import type { Conversation } from './Conversation';
 import { VoiceActivity } from './VoiceActivity';
 
@@ -63,6 +64,11 @@ const REPORT_POLL_MS = 15_000;
 const REPORT_MAX_MS = 4 * 60_000;
 /** Segments déjà présents relus à la reprise d'une réunion. */
 const RESUME_LINES = 200;
+/**
+ * Réponse de l'agent sans voix de Breign (`agent.audio`) au bout de ce délai : synthèse locale
+ * avec la voix de l'app configurée ici (agent sans « app qui prête sa voix »).
+ */
+const SERVER_VOICE_GRACE_MS = 2500;
 /** Réunion de cet appareil, reprise après un rechargement de la page. */
 const STORAGE_KEY = 'breign-avatar:meeting';
 
@@ -76,8 +82,11 @@ const STORAGE_KEY = 'breign-avatar:meeting';
  *
  * L'avatar, lui :
  *  - affiche la transcription en direct (texte provisoire du WebSocket, puis segments) ;
- *  - lit les réponses de l'agent (segments `agent`) et les dit à voix haute si le réglage le
- *    demande ; quelqu'un qui prend vraiment la parole (près d'une seconde) le fait taire ;
+ *  - affiche les réponses de l'agent (segments `agent`) ; quand l'agent a une « app qui prête sa
+ *    voix » (`meetingConfiguration.voiceAppId`), Breign les synthétise et les envoie sur le
+ *    WebSocket (`agent.audio`) : l'avatar les joue telles quelles, lip-sync sur le son. Sans
+ *    elle, il les synthétise avec la voix de l'app réglée ici. Quelqu'un qui prend vraiment la
+ *    parole (près d'une seconde) le fait taire ;
  *  - en mode « mic », n'envoie que du silence pendant qu'il parle lui-même (sa voix revenue par
  *    les enceintes n'entre pas dans la transcription), sauf si on lui coupe la parole ;
  *  - reprend la réunion de cet appareil après une coupure ou un rechargement de la page.
@@ -101,6 +110,11 @@ export class MeetingSession {
   private inSpeech = false;
   /** Incrémenté à l'arrêt : les réponses tardives d'une session close sont ignorées. */
   private epoch = 0;
+  /** Breign dit lui-même les réponses (trames `agent.audio` reçues) : pas de synthèse locale. */
+  private serverVoice = false;
+  /** Réponse dite par la voix de Breign en cours (pour regrouper ses phrases). */
+  private audioReply?: string;
+  private lastAudioAt = 0;
 
   constructor(
     private voice: Voice,
@@ -162,6 +176,8 @@ export class MeetingSession {
       this.meeting = opened.meeting;
       first = opened.session;
       this.lastSeq = 0;
+      this.serverVoice = false;
+      this.audioReply = undefined;
       this.spokenUntil = opened.meeting.lastSegmentSeq ?? 0;
       remember(opened.meeting.id);
     } catch (e) {
@@ -182,6 +198,7 @@ export class MeetingSession {
         this.events.onLive?.(null);
         void this.pollSegments(); // le segment est enregistré : on l'affiche sans attendre
       },
+      onFrame: (f) => this.onFrame(f),
       onState: (st, detail) => {
         if (transcription !== this.transcription) return;
         if (st === 'failed') {
@@ -411,9 +428,48 @@ export class MeetingSession {
     if (replies.length) {
       this.spokenUntil = replies[replies.length - 1].seq;
       const text = replies.map((s) => s.text).join(' ');
-      if (this.speakReplies()) this.conversation.speak(text);
+      // Breign dit lui-même les réponses quand l'agent a une « app qui prête sa voix »
+      // (`agent.audio`). Sinon, après un court délai, la voix de l'app configurée ici.
+      if (this.speakReplies() && !this.serverVoice) {
+        const epoch = this.epoch;
+        const seen = this.lastAudioAt;
+        window.setTimeout(() => {
+          if (epoch === this.epoch && !this.serverVoice && this.lastAudioAt === seen) this.conversation.speak(text);
+        }, SERVER_VOICE_GRACE_MS);
+      }
       void this.refreshMeeting(); // une réponse va souvent avec un point clé
     }
+  }
+
+  /** Trames propres à la réunion sur le WebSocket de transcription. */
+  private onFrame(f: TranscriptFrame) {
+    if (f.type === 'agent.audio') return this.onAgentAudio(f);
+    if (f.type === 'agent.update') {
+      // Réponse, notes ou points clés mis à jour : on relit sans attendre le prochain tour.
+      void this.pollSegments();
+      void this.refreshMeeting();
+      return;
+    }
+    if (f.type !== 'usage') console.debug('[meeting] trame', f);
+  }
+
+  /**
+   * Voix de l'agent, synthétisée par Breign avec l'app qui lui prête sa voix. Le format exact
+   * de la trame n'est pas documenté : on accepte une URL (`audio.src`, `src`, `url`) ou de
+   * l'audio en base64 (`audio.data`, `data`), encodé (mp3, wav…) ou PCM16 brut.
+   */
+  private onAgentAudio(f: TranscriptFrame) {
+    this.serverVoice = true;
+    this.lastAudioAt = Date.now();
+    if (!this.speakReplies()) return;
+    const src = agentAudioSrc(f);
+    const text = String(f.text ?? (f.audio as { text?: string } | undefined)?.text ?? '');
+    if (!src && !text) return console.warn('[meeting] trame agent.audio illisible', f);
+    // Une nouvelle réponse : autre message, première phrase, ou l'avatar avait fini de parler.
+    const key = String(f.messageId ?? f.wakeupId ?? f.replyId ?? f.seq ?? '');
+    const starts = f.sequence === 0 || (key ? key !== this.audioReply : !this.voice.busy);
+    this.audioReply = key || undefined;
+    this.conversation.speakPrepared(text, src, starts);
   }
 
   private async refreshMeeting() {
@@ -435,6 +491,27 @@ export class MeetingSession {
       console.warn('[meeting] état de la réunion illisible', e);
     }
   }
+}
+
+/** Source jouable de l'audio d'une trame `agent.audio` (URL, data URL ou blob WAV). */
+export function agentAudioSrc(f: TranscriptFrame): string | undefined {
+  const a = (typeof f.audio === 'object' && f.audio ? f.audio : {}) as Record<string, unknown>;
+  const url = a.src ?? a.url ?? f.src ?? f.url ?? f.audioUrl ?? (typeof f.audio === 'string' && /^(https?:|data:|blob:|\/)/.test(f.audio) ? f.audio : undefined);
+  if (typeof url === 'string' && url) return url;
+  const data = a.data ?? a.base64 ?? f.data ?? (typeof f.audio === 'string' ? f.audio : undefined);
+  if (typeof data !== 'string' || !data) return undefined;
+  const format = String(a.encoding ?? a.format ?? a.mimeType ?? f.encoding ?? f.format ?? f.mimeType ?? 'audio/mpeg').toLowerCase();
+  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  if (format.includes('pcm')) {
+    // PCM16 brut : on l'enveloppe en WAV pour que le navigateur sache le décoder.
+    const rate = Number(a.sampleRate ?? f.sampleRate) || 24000;
+    const view = new DataView(bytes.buffer);
+    const samples = new Float32Array(bytes.length >> 1);
+    for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 0x8000;
+    return URL.createObjectURL(encodeWav(samples, rate));
+  }
+  const mime = format.includes('/') ? format : `audio/${format === 'mp3' ? 'mpeg' : format}`;
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
 }
 
 function clock(ms: number): string {
