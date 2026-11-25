@@ -78,6 +78,19 @@
         </label>
         <div class="account">
           <span class="account-label">Compte Breign</span>
+          <details id="org-box" class="org-box">
+            <summary>Organisation : <span id="org-summary"></span></summary>
+            <label>Client OAuth (client id)
+              <input name="oauthClientId" autocomplete="off" spellcheck="false" placeholder="id du client de l’organisation" />
+            </label>
+            <label>Secret du client — seulement pour un client confidentiel
+              <input name="oauthClientSecret" type="password" autocomplete="off" placeholder="vide pour un client public" />
+            </label>
+            <label>Resource — optionnel
+              <input name="oauthResource" autocomplete="off" spellcheck="false" placeholder="par défaut : l’URL de l’API" />
+            </label>
+            <small>Créez le client dans l’écran Applications de l’organisation Breign, avec l’adresse de retour <code id="org-callback"></code>. L’organisation est celle du client. Tout est gardé dans ce navigateur seulement ; le secret part d’ici vers Breign à la connexion. Préférez un client public (sans secret).</small>
+          </details>
           <div id="account-out" class="row">
             <button type="button" id="login" class="primary">Se connecter avec Breign</button>
           </div>

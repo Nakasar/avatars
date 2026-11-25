@@ -9,7 +9,16 @@ import { Conversation, type ConversationState } from './conversation/Conversatio
 import { MeetingSession, type MeetingLine, type MeetingSource } from './conversation/Meeting';
 import type { MeetingUio } from '@breign/client';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
-import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
+import {
+  CALLBACK_PATH,
+  clearSession,
+  completeLogin,
+  credentialTag,
+  isSignedIn,
+  revokeLogin,
+  sessionClientId,
+  startLogin,
+} from './breign/oauth';
 import { parseActions } from './actions/parse';
 import { actionPrompt, allActionCodes, type ActionCode } from './actions/vocabulary';
 import type { Expression } from './avatar/Avatar';
@@ -517,6 +526,11 @@ function fillForm() {
 }
 
 // Aperçu en direct : l'apparence et la couleur changent dès qu'on les choisit.
+form.addEventListener('input', (e) => {
+  if ((e.target as HTMLInputElement).name === 'oauthClientId') {
+    $('org-summary').textContent = orgLabel((e.target as HTMLInputElement).value.trim());
+  }
+});
 form.addEventListener('change', (e) => {
   const name = (e.target as HTMLInputElement).name;
   if (name !== 'appearance' && name !== 'orbColor') return;
@@ -546,8 +560,17 @@ $('settings-btn').addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------- Connexion Breign (OAuth2)
+function orgLabel(clientId: string) {
+  return clientId ? `client ${clientId.length > 12 ? `${clientId.slice(0, 12)}…` : clientId}` : 'à renseigner';
+}
+
 function renderAccount() {
   const signedIn = isSignedIn(settings);
+  const clientId = (form.elements.namedItem('oauthClientId') as HTMLInputElement).value.trim();
+  $('org-summary').textContent = orgLabel(clientId);
+  $('org-callback').textContent = `${location.origin}${CALLBACK_PATH}`;
+  // Ouvert tant qu'aucun client n'est réglé (hors local, où le client de la CLI suffit).
+  $<HTMLDetailsElement>('org-box').open = !clientId && !signedIn && location.hostname !== '127.0.0.1';
   $('account-out').hidden = signedIn;
   $('account-in').hidden = !signedIn;
   $('account-name').textContent = settings.account
@@ -566,7 +589,7 @@ async function login() {
   if (dialog.open) settings = { ...readForm(), apiKey: settings.apiKey };
   saveSettings(settings);
   try {
-    await startLogin(settings.basePath);
+    await startLogin(settings);
   } catch (e) {
     showError(await describeError(e));
   }
@@ -588,6 +611,12 @@ dialog.addEventListener('close', () => {
   const next = readForm();
   // Une clé changée à la main n'est plus celle du compte connecté.
   if (next.apiKey !== settings.apiKey) next.account = undefined;
+  // Autre client OAuth = autre organisation : la session ouverte avec l'ancien ne vaut plus.
+  const session = sessionClientId();
+  if (session && session !== (next.oauthClientId || 'breign-cli')) {
+    clearSession();
+    if (next.account?.kind === 'oidc') next.account = undefined;
+  }
   settings = next;
   saveSettings(settings);
   renderAccount();
