@@ -15,7 +15,7 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "@breign/client": "^1.0.198",
+    "@breign/client": "^1.0.216",
     "three": "^0.187.0"
   },
   "devDependencies": {

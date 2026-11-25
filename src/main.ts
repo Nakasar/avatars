@@ -6,7 +6,8 @@ import { Orb, ORB_PALETTES } from './orb/Orb';
 import { Voice } from './avatar/Voice';
 import { BreignService, describeError, type BreignSettings } from './breign/BreignService';
 import { Conversation, type ConversationState } from './conversation/Conversation';
-import { MeetingSession, type MeetingSource, type TranscriptLine } from './conversation/Meeting';
+import { MeetingSession, type MeetingLine, type MeetingSource } from './conversation/Meeting';
+import type { MeetingUio } from '@breign/client';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
 import { completeLogin, credentialTag, isSignedIn, revokeLogin, startLogin } from './breign/oauth';
 import { parseActions } from './actions/parse';
@@ -26,7 +27,6 @@ let settings: AppSettings = loadSettings();
 let breign = new BreignService(settings);
 const voice = new Voice((text) => breign.textToSpeech(text), settings.lang);
 let avatar: Character | undefined;
-let agentName = '';
 let meetingActive = false;
 const DEFAULT_MODEL = '/models/human.glb';
 
@@ -90,8 +90,6 @@ const HUMAN_EXPRESSIONS: Record<string, [Expression, number]> = {
 };
 
 function applyAction(code: ActionCode) {
-  // Les codes TOOL ne touchent pas à l'apparence : l'avatar exécute l'outil localement.
-  if (code.category === 'TOOL') return void runLocalTool(code);
   if (!avatar) return;
   if (avatar.applyAction?.(code)) return;
   if (code.category === 'EMOTION' && HUMAN_EXPRESSIONS[code.value]) {
@@ -102,29 +100,6 @@ function applyAction(code: ActionCode) {
   else console.info('[actions] code non joué par cette apparence :', code.raw);
 }
 voice.onCue = applyAction;
-
-/**
- * Outil local exécuté dans le navigateur (code `[ACTION.TOOL.…]` émis par l'agent, en texte
- * ou en `DO_ACTION`) : le résultat est renvoyé à l'agent comme message suivant.
- */
-function runLocalTool(code: ActionCode) {
-  const en = settings.lang.startsWith('en');
-  if (code.value !== 'TRANSCRIPT_SEARCH') return console.info('[tools] outil inconnu :', code.raw);
-  if (!meeting.active) {
-    return conversation.sendText(
-      en
-        ? '[Local tool TRANSCRIPT_SEARCH unavailable: no meeting in progress (🎧/🎙️ buttons).]'
-        : '[Outil local TRANSCRIPT_SEARCH indisponible : aucune réunion en cours (boutons 🎧/🎙️).]',
-    );
-  }
-  const query = code.param?.trim() ?? '';
-  const result = meeting.searchTranscript(query);
-  conversation.sendText(
-    en
-      ? `[Result of the local tool TRANSCRIPT_SEARCH${query ? ` (search “${query}”)` : ''} — full meeting transcript]\n${result}`
-      : `[Résultat de l’outil local TRANSCRIPT_SEARCH${query ? `, recherche « ${query} »` : ''} — transcription complète de la réunion]\n${result}`,
-  );
-}
 
 /** Joue tout de suite les codes d'un texte (champ de test des réglages, console). */
 function testActions(text: string) {
@@ -274,6 +249,7 @@ function connectSocket() {
     onState: (state, detail) => {
       if (s !== socket) return;
       conversation.appMode = state === 'ready';
+      if (state === 'ready') void conversation.ensureStream();
       $('socket-status').textContent = SOCKET_LABEL[state];
       if (detail) showError(detail);
     },
@@ -283,7 +259,7 @@ function connectSocket() {
 }
 window.addEventListener('pagehide', () => {
   socket?.close();
-  meeting.stop();
+  meeting.pause(); // la réunion continue : elle sera reprise au prochain 🎧/🎙️
 });
 
 /** Joue un message comme s'il venait de la web socket : appSocketMessage({ type: 'SHOW_IMAGE', … }). */
@@ -305,10 +281,7 @@ const conversation = new Conversation(voice, () => breign, () => avatar, {
     updateHint(s);
   },
   onUserText: (text) => caption('user', text),
-  onAgentText: (text) => {
-    caption('agent', text || '…');
-    meeting.noteAgentText(text); // pour filtrer l'écho de sa propre voix en mode réunion « mic »
-  },
+  onAgentText: (text) => caption('agent', text || '…'),
   onError: (msg) => showError(msg),
   onLevel: (level) => {
     if (!meetingActive) $('orb').style.setProperty('--level', level.toFixed(3));
@@ -320,6 +293,10 @@ const conversation = new Conversation(voice, () => breign, () => avatar, {
   },
   onAppAction: handleAppAction,
   onSuggestions: showSuggestions,
+  onLiveTranscription: (live) => {
+    document.body.dataset.live = live ? 'on' : 'off';
+    updateHint();
+  },
 });
 
 function caption(kind: 'user' | 'agent', text: string) {
@@ -338,50 +315,103 @@ function showError(msg: string) {
   errorTimer = window.setTimeout(() => el.classList.remove('visible'), 7000);
 }
 
-// ---------------------------------------------------------------- Mode réunion (companion)
+// ---------------------------------------------------------------- Mode réunion (API meetings)
 const meetingBtn = $('meeting-btn');
 const meetingMicBtn = $('meeting-mic-btn');
 const transcriptEl = $('transcript');
 const transcriptLines = $('transcript-lines');
-
-/** Mot d'activation : réglage, sinon nom de l'agent, sinon « breign ». */
-function wakeWord() {
-  return settings.wakeWord.trim() || agentName || 'breign';
-}
+const transcriptLive = $('transcript-live');
 
 function updateHint(s: ConversationState = conversation.current) {
   if (!meetingActive) {
-    $('hint').textContent = STATE_LABEL[s];
+    const live = conversation.live && (s === 'idle' || s === 'user-speaking') ? ' · transcription en direct' : '';
+    $('hint').textContent = STATE_LABEL[s] + live;
     return;
   }
   const src =
     meeting.currentSource === 'mic'
       ? 'le micro de cet appareil écoute la pièce'
       : 'j’écoute l’onglet partagé';
-  $('hint').textContent = `Mode réunion : ${src} — je transcris, et je réponds quand on m’appelle « ${wakeWord()} »`;
+  $('hint').textContent = `Mode réunion : ${src}. Appelez-moi par mon nom pour me poser une question.`;
 }
 
-function appendTranscript(line: TranscriptLine) {
-  const p = document.createElement('p');
-  p.className =
-    'transcript-line' + (line.addressed ? ' addressed' : '') + (line.self ? ' self' : '');
-  const time = document.createElement('time');
-  time.textContent = line.time;
-  p.append(time, document.createTextNode(line.text));
-  transcriptLines.append(p);
-  while (transcriptLines.children.length > 200) transcriptLines.firstElementChild?.remove();
+function appendLines(lines: MeetingLine[]) {
+  for (const line of lines) {
+    const p = document.createElement('p');
+    p.className =
+      'transcript-line' +
+      (line.source === 'agent' ? ' agent' : '') +
+      (line.addressed ? ' addressed' : '') +
+      (line.ignored ? ' ignored' : '');
+    if (line.ignored) p.title = 'L’agent a jugé que cette phrase ne lui était pas adressée.';
+    const time = document.createElement('time');
+    time.textContent = line.time;
+    p.append(time);
+    const who = line.source === 'agent' ? $('agent-name').textContent || 'Agent' : line.speaker;
+    if (who) {
+      const sp = document.createElement('span');
+      sp.className = 'speaker';
+      sp.textContent = who;
+      p.append(sp);
+    }
+    p.append(document.createTextNode(line.text));
+    transcriptLines.append(p);
+  }
+  while (transcriptLines.children.length > 300) transcriptLines.firstElementChild?.remove();
   transcriptLines.scrollTop = transcriptLines.scrollHeight;
 }
 
-const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, {
-  onTranscript: appendTranscript,
+const HIGHLIGHT_LABEL: Record<string, string> = {
+  decision: 'Décision',
+  action_item: 'Action',
+  risk: 'Risque',
+  question: 'Question',
+  info: 'Info',
+};
+
+/** Notes et points clés de la réunion, tels que l'agent les tient à jour. */
+function renderMeeting(m: MeetingUio) {
+  $('meeting-title').textContent = m.status === 'ended' ? 'Réunion terminée' : 'Réunion';
+  $('meeting-end').hidden = m.status === 'ended';
+  const list = $('meeting-highlights');
+  list.replaceChildren(
+    ...(m.highlights ?? []).map((h) => {
+      const li = document.createElement('li');
+      const kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = HIGHLIGHT_LABEL[h.kind] ?? h.kind;
+      const extra = [h.owner, h.dueDate].filter(Boolean).join(', ');
+      li.append(kind, document.createTextNode(h.text + (extra ? ` (${extra})` : '')));
+      return li;
+    }),
+  );
+  const notes = m.notes?.markdown?.trim() ?? '';
+  $('meeting-notes-body').textContent =
+    notes || (m.status === 'ended' ? 'Compte rendu en cours de rédaction…' : 'Les notes apparaissent au fil de la réunion.');
+  const updated = m.notes?.updatedAt ? new Date(m.notes.updatedAt) : null;
+  $('meeting-notes-meta').textContent = updated
+    ? `· ${m.status === 'ended' && notes ? 'compte rendu' : 'mises à jour'} à ${updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '';
+}
+
+const meeting = new MeetingSession(voice, conversation, () => breign, () => settings.meetingVoice !== 'off', {
+  onLines: appendLines,
+  onLive: (text) => {
+    transcriptLive.hidden = !text;
+    transcriptLive.textContent = text ?? '';
+    if (text) transcriptLines.scrollTop = transcriptLines.scrollHeight;
+  },
+  onMeeting: renderMeeting,
   onActive: (on, source) => {
     meetingActive = on;
     document.body.dataset.meeting = on ? 'on' : 'off';
-    transcriptEl.hidden = !on;
+    if (on) {
+      transcriptLines.replaceChildren();
+      transcriptEl.hidden = false;
+    }
     meetingBtn.classList.toggle('active', on && source !== 'mic');
     meetingMicBtn.classList.toggle('active', on && source === 'mic');
-    // En mode réunion, seule la source de la réunion déclenche les tours (le micro est suspendu).
+    // En mode réunion, le micro ne déclenche plus de tour : c'est Breign qui réveille l'agent.
     conversation.vad.paused = on;
     updateHint();
   },
@@ -391,14 +421,18 @@ const meeting = new MeetingSession(voice, conversation, () => breign, wakeWord, 
   },
 });
 
-/** Lance/arrête le mode réunion sur une source : 🎧 onglet de visioconférence, 🎙️ micro de la pièce. */
+/**
+ * 🎧 onglet de visioconférence, 🎙️ micro de la pièce. Un second clic met l'écoute en pause
+ * (la réunion continue côté Breign, un nouveau clic la reprend) ; « Terminer » la clôt.
+ */
 async function toggleMeeting(source: MeetingSource) {
   if (meeting.active) {
-    if (meeting.currentSource === source) return meeting.stop();
-    meeting.stop(); // on bascule sur l'autre source
+    if (meeting.currentSource === source) return meeting.pause();
+    meeting.pause(); // on bascule sur l'autre source
   }
   await begin();
   if (conversation.current === 'off') return;
+  conversation.interrupt();
   try {
     // En mode « mic », on réutilise le micro déjà ouvert de la conversation.
     await meeting.start(source, source === 'mic' ? conversation.vad.mediaStream : undefined);
@@ -414,7 +448,16 @@ meetingMicBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   void toggleMeeting('mic');
 });
-$('transcript-clear').addEventListener('click', () => transcriptLines.replaceChildren());
+$('meeting-end').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $<HTMLDetailsElement>('meeting-notes').open = true;
+  void meeting.end();
+});
+$('transcript-close').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (meeting.active) meeting.pause();
+  transcriptEl.hidden = true;
+});
 
 // Démarrage au premier geste : les navigateurs exigent une interaction pour le micro et le son.
 async function begin() {
@@ -455,6 +498,8 @@ typeBox.addEventListener('submit', (e) => {
   typeInput.value = '';
   typeBox.classList.remove('visible');
   if (!text) return;
+  // En réunion, le message écrit va à l'agent de la réunion (comme une interpellation orale).
+  if (meeting.active) return void meeting.sendText(text);
   void begin().then(() => conversation.sendText(text));
 });
 
@@ -584,6 +629,7 @@ $('demo').addEventListener('click', () => {
 async function applySettings() {
   breign = new BreignService(settings);
   voice.lang = settings.lang;
+  conversation.closeStream(true); // nouvelle conversation : nouveau flux de transcription
   connectSocket();
   if (!breign.configured) {
     $('agent-name').textContent = '';
@@ -591,7 +637,6 @@ async function applySettings() {
   }
   try {
     const agent = await breign.getAgent();
-    agentName = agent.name;
     $('agent-name').textContent = agent.name;
   } catch (e) {
     showError(await describeError(e));

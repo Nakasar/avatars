@@ -68,6 +68,8 @@ export class VoiceActivity {
   onSpeechCancel?: () => void;
   /** Niveau courant, 0–1, pour l'indicateur visuel. */
   onLevel?: (level: number, speaking: boolean) => void;
+  /** Chaque trame audio brute (20 ms, débit de l'`AudioContext`), pour la transcription en flux. */
+  onFrame?: (frame: Float32Array, sampleRate: number) => void;
 
   private stream?: MediaStream;
   /** Faux quand le stream vient de l'extérieur (ex. audio d'une réunion capturé) : on ne l'arrête pas. */
@@ -164,6 +166,7 @@ export class VoiceActivity {
     const voiced =
       !this.paused && db > Math.max(o.floorDb + boost, this.noiseDb + o.thresholdDb + boost);
     this.onLevel?.(Math.min(1, Math.max(0, (db - this.noiseDb) / 40)), this.inSpeech);
+    this.onFrame?.(f, this.sampleRate);
 
     // Mémoire tampon de pré-écoute.
     this.preRoll.push(f);

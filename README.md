@@ -48,13 +48,13 @@ connexion. Une clé API collée à la main reste possible (« Utiliser une clé 
 | Application | Optionnel : application (avatar) Breign. La conversation passe alors par l'application et sa web socket (voix, images et actions de Breign), et sa transcription est utilisée. Sans elle, l'agent répond par l'API des prompts et la voix du navigateur est utilisée. |
 | Instance de l'application | Optionnel : instance de l'app pour cet appareil (une seule socket par instance). Vide : l'instance par défaut. |
 | Langue | Langue de la conversation, de la voix et de la transcription. |
-| Mot d'activation en réunion | En mode réunion (🎧), l'avatar ne répond que quand ce mot est prononcé dans l'audio partagé. Vide : le nom de l'agent, sinon « breign ». |
+| Réponses en réunion | « Dites à voix haute » (par défaut) ou « Texte seulement » : ce que fait l'avatar des réponses de l'agent en mode réunion. Les mots d'activation se règlent sur l'agent, dans Breign. |
 | Apparence du bot | « Orbe IA (mascotte) », par défaut au chargement, ou « Humain réaliste » (le modèle 3D, chargé seulement s'il est choisi). L'aperçu change en direct. |
 | Couleur de l'orbe | Bleu, orange, vert ou violet. |
 | Modèle 3D | URL d'un GLB (voir plus bas), pour l'apparence humaine. |
 
 Les mêmes valeurs peuvent venir de `.env.local` (voir `.env.example`) ou de l'URL :
-`?agent=…&app=…&instance=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&wake=Breign&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
+`?agent=…&app=…&instance=…&lang=fr&model=…&look=human|orb&color=blue|orange|green|violet&meetingVoice=on|off&quality=high|medium|low`. La clé API n'est jamais lue depuis l'URL.
 
 Le bouton « Tester la voix » des réglages fait parler l'avatar sans connexion à Breign.
 
@@ -117,8 +117,18 @@ bouton n'est nécessaire :
 - **Interruption** : si vous parlez pendant que l'avatar parle, il se tait aussitôt et vous
   écoute. Pendant qu'il parle, le seuil est relevé (+9 dB, 320 ms) pour que l'écho résiduel ne
   le coupe pas lui-même (l'annulation d'écho du navigateur est activée).
-- **Phrase reprise** : si vous reprenez la parole pendant qu'il réfléchit, la réponse en cours
-  est abandonnée et votre nouvelle phrase est ajoutée à la précédente.
+- **Transcription en direct** (avec une application Breign) : dès que la conversation de l'app
+  existe (premier message), le micro est streamé vers
+  `POST /apps/{appId}/chats/{chatId}/transcription-sessions` (WebSocket, PCM16). Votre phrase
+  s'affiche pendant que vous parlez (`transcript.partial`), Breign envoie lui-même le tour à
+  l'agent (`avatar.turn`) et la réponse arrive sur la web socket de l'app. Le VAD local ne
+  sert plus qu'à n'envoyer l'audio que pendant la parole (ni le silence de la pièce, ni la voix
+  de l'avatar) et à détecter les interruptions ; `commit` clôt le tour 300 ms après la fin de
+  la parole. Le témoin affiche « transcription en direct ».
+- **Sinon** (tout premier message, mode agent sans app, déploiement ou modèle sans flux) :
+  chaque phrase est découpée par le VAD, transcrite (`speech-to-text`) puis envoyée. Si vous
+  reprenez la parole pendant qu'il réfléchit, la réponse en cours est abandonnée et votre
+  nouvelle phrase est ajoutée à la précédente.
 - **Attitudes** (`Avatar.setMode`) :
   - écoute : penché vers vous, regard sur vos yeux, sourcils qui réagissent à votre voix, hochement de tête à la fin de votre phrase ;
   - réflexion : regard détourné vers le haut sur le côté, tête inclinée, sourcil froncé, lèvres qui se pincent, clignements plus lents ;
@@ -128,45 +138,40 @@ bouton n'est nécessaire :
 
 ## Mode réunion : companion actif
 
-Deux boutons en haut à droite transforment l'avatar en participant de la réunion :
+Le mode réunion s'appuie sur l'**API meetings de Breign** (`POST /agents/{agentId}/meetings`) :
+il faut activer le mode réunion sur l'agent et lui configurer un modèle de transcription. Deux
+boutons en haut à droite font de l'avatar un participant de la réunion :
 
 - **🎧 réunion en ligne** : le navigateur demande de **partager un onglet** (celui de la
-  visioconférence, avec « partager l'audio de l'onglet ») — la piste vidéo, exigée par Chrome,
+  visioconférence, avec « partager l'audio de l'onglet ») ; la piste vidéo, exigée par Chrome,
   est aussitôt coupée ;
 - **🎙️ réunion physique** : le **micro de l'appareil** (PC ou téléphone posé dans la pièce)
-  écoute la pièce ; sur téléphone, servez la page en HTTPS (Vercel) et montez le volume pour
-  que l'avatar se fasse entendre. Sa propre voix, revenue par les enceintes, est reconnue
-  (chevauchement de mots avec ce qu'il vient de dire) et affichée à part sans jamais déclencher
-  de réponse — l'annulation d'écho du navigateur fait le gros du travail.
+  écoute la pièce. Sur téléphone, servez la page en HTTPS (Vercel).
 
-Dans les deux cas :
+L'audio est streamé en continu vers la session de transcription de la réunion. **Breign fait
+le reste** : transcription, réveil de l'agent quand on l'appelle (son nom, chaque mot de son
+nom, ses surnoms réglés sur l'agent, « Breign », et sauf réglage contraire « bot » et « agent »,
+mauvaises transcriptions courantes comprises), contexte des dernières minutes, notes mises à
+jour toutes les quelques minutes, points clés (décisions, actions, risques, questions) et
+compte rendu final. L'avatar :
 
-- l'audio de la réunion passe par le même VAD que le micro (`conversation/VoiceActivity.ts`,
-  avec un stream externe) : chaque énoncé est découpé, transcrit (STT Breign) et **affiché
-  en direct dans le panneau « Transcription »**, horodaté ;
-- quand le **mot d'activation** est prononcé (« Breign, quelles sont les prochaines étapes ? »),
-  la ligne est surlignée, la question (ce qui suit le mot) est envoyée à l'agent avec les
-  12 dernières lignes de la transcription en contexte, et l'avatar répond de vive voix ;
-- **outil local `TRANSCRIPT_SEARCH`** : toute la transcription est gardée en mémoire (5000
-  lignes). L'agent peut la fouiller en émettant `[ACTION.TOOL.TRANSCRIPT_SEARCH:mot-clé]`
-  (code d'action, donc aussi reçu en `DO_ACTION` avec une application ; consignes copiables
-  dans ⚙ → « Copier les consignes », voir [docs/codes-action.md](docs/codes-action.md)) :
-  l'avatar exécute la recherche localement et renvoie les passages horodatés les plus
-  pertinents (40 max, tronqué à 8000 caractères) comme message suivant — l'agent peut ainsi
-  aller rechercher n'importe où dans la réunion, pas seulement dans les 12 dernières lignes ;
-- si quelqu'un prend vraiment la parole (près d'une seconde) pendant que l'avatar répond, il se
-  tait (barge-in) ; un « hmm » ou une toux ne le coupe pas, et une réponse en préparation n'est
-  jamais abandonnée parce que la réunion continue de parler ;
-- les énoncés sont transcrits en parallèle mais affichés dans l'ordre où ils ont été dits.
+- affiche la **transcription en direct** dans le panneau « Réunion » (texte provisoire, puis
+  segments horodatés avec le locuteur quand le modèle le donne) ; les phrases qui ont réveillé
+  l'agent sont surlignées, celles qu'il a jugées non adressées sont estompées ;
+- **dit les réponses de l'agent** à voix haute (réglage « Réponses en réunion »), avec la voix de
+  l'application ; quelqu'un qui prend vraiment la parole (près d'une seconde) le fait taire ;
+- en 🎙️, envoie du silence pendant qu'il parle : sa propre voix ne rentre pas dans la
+  transcription (sauf si on lui coupe la parole) ;
+- montre les **notes et points clés** (section « Notes » du panneau) ;
+- envoie ce que vous tapez (`/`) à l'agent de la réunion, comme une interpellation orale.
 
-En mode réunion, le micro ne déclenche plus de tour : seule la réunion est écoutée (la saisie
-au clavier `/` reste possible). Le mot d'activation se règle dans les réglages (⚙), par
-`VITE_MEETING_WAKE_WORD` ou `?wake=…` ; la détection ignore la casse et les accents, accepte les
-**variantes phonétiques** (« Brain », « Bren », « Breigne » pour « breign », via une clé
-phonétique française simplifiée + distance d'édition) et respecte les frontières de mot
-(« breigner » ne déclenche pas « breign »). « **Breign** » est toujours écouté (même si l'agent a un autre nom), ainsi que les **noms
-génériques « agent », « bot » et « robot »** (attention aux faux positifs, ex. « l'agent
-immobilier »). Arrêter le partage depuis la barre du navigateur quitte le mode réunion.
+Un second clic sur 🎧/🎙️ (ou l'arrêt du partage) **met l'écoute en pause** : la réunion
+continue côté Breign, et un nouveau clic la reprend (aussi après un rechargement de la page).
+**Terminer** clôt la réunion ; le compte rendu final remplace les notes environ une minute
+après. Sans audio pendant 15 minutes, Breign termine la réunion de lui-même.
+
+Les segments sont lus par `GET /meetings/{id}/segments?fromSeq=…` toutes les 1,5 s (aucun
+canal push n'est documenté pour eux), les notes par `GET /meetings/{id}` toutes les 20 s.
 
 ## Architecture
 
@@ -175,7 +180,7 @@ src/
   main.ts                  assemblage : scène, avatar, conversation, sous-titres, réglages
   conversation/
     Conversation.ts        tours de parole, interruptions, état de l'avatar
-    Meeting.ts             mode réunion : capture d'onglet, transcription, mot d'activation
+    Meeting.ts             mode réunion : capture, API meetings, segments, notes
     VoiceActivity.ts       écoute continue du micro, détection de voix, WAV 16 kHz
   settings.ts              réglages (env → navigateur → URL)
   scene/Stage.ts           rendu : tone mapping AgX, IBL, éclairage 3 points, ombres douces,
@@ -186,6 +191,7 @@ src/
   actions/vocabulary.ts    vocabulaire des codes d'action (source de docs/codes-action.md)
   actions/parse.ts         repérage et retrait des codes dans le texte, même en streaming
   breign/AppSocket.ts      web socket de l'application : authentification, ping, rejeu
+  breign/TranscriptionStream.ts  transcription en flux : ticket, PCM16, partiels, reconnexion
   breign/nativeActions.ts  actions natives des messages Breign (image, vidéo, page web)
   conversation/AppReplies.ts  réponses reçues sur la socket : tours, ordre des phrases, médias
   avatar/Avatar.ts         chargement GLB (KTX2, meshopt, Draco), mise en pose, blendshapes,
@@ -210,8 +216,9 @@ Le dialogue reprend le fonctionnement de la CLI `breign chat` :
 3. chaque phrase complète part aussitôt en synthèse vocale : l'avatar commence à parler avant la
    fin de la génération.
 
-La transcription du micro passe par `convertAppSpeechToText` (ou `convertAgentSpeechToText`
-sans application), avec un WAV PCM 16 kHz encodé dans le navigateur.
+Avec une application, la transcription du micro passe en flux (voir « Conversation vocale ») ;
+sinon par `convertAppSpeechToText` (ou `convertAgentSpeechToText` sans application), avec un
+WAV PCM 16 kHz encodé dans le navigateur.
 
 ## Modèle 3D
 
@@ -255,9 +262,8 @@ Chaque push sur `main` part en production, chaque branche ou PR a son aperçu. L
 - La détection de voix se base sur l'énergie : dans une pièce très bruyante, un modèle de VAD
   neuronal (Silero) serait plus fiable. Les seuils sont réglables dans `DEFAULT_VAD`.
 - En mode réunion en ligne, partagez **l'onglet de la visioconférence**, pas l'écran entier :
-  avec le son du système, la voix de l'avatar elle-même peut être recapturée (les seuils de
-  barge-in atténuent la boucle, sans la supprimer). `getDisplayMedia` exige un geste utilisateur
-  et un contexte sécurisé (HTTPS ou localhost).
-- En réunion physique (🎙️), posez l'appareil **près de la table** et pas à côté des enceintes
-  de l'avatar : l'annulation d'écho du navigateur + le filtre anti-écho (70 % de mots communs
-  avec la dernière réponse) évitent la boucle, mais un pièce très sonore reste difficile.
+  avec le son du système, la voix de l'avatar elle-même serait transcrite. Les participants
+  distants n'entendent pas l'avatar (il ne rejoint pas l'appel). `getDisplayMedia` exige un
+  geste utilisateur et un contexte sécurisé (HTTPS ou localhost).
+- Les champs de la trame `avatar.turn` ne sont pas documentés : l'avatar lit `messageId` et
+  `text` s'ils sont présents, et reste tolérant sinon.

@@ -190,7 +190,22 @@ body[data-state='off'] .presence { opacity: 0; }
 .transcript-line { margin: 0; font-size: 13px; line-height: 1.4; }
 .transcript-line time { color: var(--muted); font-size: 11px; margin-right: 8px; font-variant-numeric: tabular-nums; }
 .transcript-line.addressed { color: var(--accent); }
-.transcript-line.self { opacity: 0.5; font-style: italic; }
+.transcript h2 .actions { display: flex; gap: 6px; align-items: center; }
+.transcript h2 .pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; }
+.transcript h2 .pill[hidden] { display: none; }
+.transcript-line .speaker { color: var(--muted); font-weight: 600; margin-right: 6px; }
+.transcript-line.agent { color: var(--accent); padding-left: 10px; border-left: 2px solid var(--accent); }
+.transcript-line.ignored { opacity: 0.55; }
+.transcript-line.live { padding: 0 14px 8px; opacity: 0.6; font-style: italic; }
+.transcript-line.live[hidden] { display: none; }
+.meeting-notes { border-top: 1px solid var(--border); font-size: 13px; max-height: 40%; overflow-y: auto; }
+.meeting-notes summary { cursor: pointer; padding: 8px 14px; color: var(--muted); font-weight: 600; }
+#meeting-notes-meta { font-weight: 400; font-size: 11px; }
+#meeting-highlights { margin: 0; padding: 0 14px 6px 30px; }
+#meeting-highlights:empty { display: none; }
+#meeting-highlights li { margin: 2px 0; }
+#meeting-highlights .kind { font-size: 11px; color: var(--muted); margin-right: 6px; }
+#meeting-notes-body { padding: 0 14px 12px; white-space: pre-wrap; line-height: 1.45; }
 @media (max-width: 720px) {
   .transcript { right: 16px; left: 16px; top: auto; bottom: 190px; width: auto; max-height: 30vh; }
 }

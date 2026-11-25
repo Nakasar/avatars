@@ -3,9 +3,14 @@ import {
   AppApi,
   AppStatusUio,
   Configuration,
+  MeetingsApi,
   PromptsApi,
   ResponseError,
   type AgentUio,
+  type MeetingSegmentUio,
+  type MeetingSessionResponseUio,
+  type MeetingUio,
+  type TranscriptionSessionUio,
 } from '@breign/client';
 import { collectNativeActions, type NativeAction } from './nativeActions';
 import { breignConfig, isSignedIn } from './oauth';
@@ -46,6 +51,7 @@ export class BreignService {
   private prompts: PromptsApi;
   private agents: AgentApi;
   private apps: AppApi;
+  private meetings: MeetingsApi;
   conversationId?: string;
   /** Conversation menée par l'application (réponses reçues sur la web socket). */
   appConversationId?: string;
@@ -57,6 +63,7 @@ export class BreignService {
     this.prompts = new PromptsApi(config);
     this.agents = new AgentApi(config);
     this.apps = new AppApi(config);
+    this.meetings = new MeetingsApi(config);
   }
 
   get configured() {
@@ -106,6 +113,54 @@ export class BreignService {
     const res = await this.apps.createAppChat(appId, { message, lang }, this.instance);
     this.appConversationId = res.conversationId;
     return res.messageId;
+  }
+
+  /**
+   * Session de transcription en flux pour la conversation de l'app : chaque tour transcrit
+   * part directement à l'agent dans cette conversation (trame `avatar.turn`), et la réponse
+   * arrive sur la web socket de l'app. Exige une conversation déjà ouverte.
+   */
+  async openAppTranscription(): Promise<TranscriptionSessionUio> {
+    const { appId, lang } = this.settings;
+    if (!appId || !this.appConversationId) throw new Error('Aucune conversation d’application ouverte.');
+    return this.apps.createAppChatTranscriptionSession(appId, this.appConversationId, this.instance, { lang });
+  }
+
+  // ------------------------------------------------------------ Mode réunion (API meetings)
+
+  /** Réunions de l'utilisateur avec l'agent, les plus récentes d'abord. */
+  async listMeetings(): Promise<MeetingUio[]> {
+    return this.meetings.listAgentMeetings(this.settings.agentId);
+  }
+
+  /** Démarre une réunion transcrite avec l'agent, et sa session de transcription. */
+  async startMeeting(title?: string): Promise<MeetingSessionResponseUio> {
+    const language = this.settings.lang.split('-')[0];
+    return this.meetings.startMeeting(this.settings.agentId, { title, language });
+  }
+
+  /** Rouvre la transcription d'une réunion active (après une coupure ou un rechargement). */
+  async resumeMeeting(meetingId: string): Promise<MeetingSessionResponseUio> {
+    return this.meetings.resumeMeetingTranscription(meetingId);
+  }
+
+  async getMeeting(meetingId: string): Promise<MeetingUio> {
+    return this.meetings.getMeeting(meetingId);
+  }
+
+  /** Segments de la transcription à partir de `fromSeq` (inclus). */
+  async meetingSegments(meetingId: string, fromSeq?: number, limit = 200): Promise<MeetingSegmentUio[]> {
+    return this.meetings.listMeetingSegments(meetingId, fromSeq, limit);
+  }
+
+  /** Message écrit de l'hôte : traité comme une interpellation orale de l'agent. */
+  async meetingMessage(meetingId: string, message: string) {
+    return this.meetings.sendMeetingMessage(meetingId, { message });
+  }
+
+  /** Termine la réunion : l'agent rédige ensuite le compte rendu final. */
+  async endMeeting(meetingId: string): Promise<MeetingUio> {
+    return this.meetings.endMeeting(meetingId);
   }
 
   /** Prévient Breign que l'avatar s'est tu (l'utilisateur lui a coupé la parole). */
@@ -230,6 +285,9 @@ export async function describeError(e: unknown): Promise<string> {
     }
     if (status === 401) return 'Session Breign expirée ou clé révoquée (401). Reconnectez-vous dans les réglages (⚙).';
     if (status === 403) return `Accès refusé (403)${detail ? ` : ${detail}` : ''}.`;
+    if (status === 409) return `Conflit (409)${detail ? ` : ${detail}` : ''} — la réunion est peut-être terminée.`;
+    if (status === 429) return `Limite atteinte (429)${detail ? ` : ${detail}` : ''}.`;
+    if (status === 501) return `Fonction indisponible sur ce déploiement Breign (501)${detail ? ` : ${detail}` : ''}.`;
     if (status === 400) return `Requête refusée par Breign${detail ? ` : ${detail}` : ''}.`;
     if (status === 404) return `Ressource introuvable (404)${detail ? ` : ${detail}` : ''}. Vérifiez l’agent ou l’application.`;
     return `Erreur ${status}${detail ? ` : ${detail}` : ''}`;

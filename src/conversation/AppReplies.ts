@@ -71,6 +71,16 @@ export class AppReplies {
     this.awaiting = false;
   }
 
+  /**
+   * Un tour transcrit en flux vient de partir à l'agent (`avatar.turn`) : c'est sa réponse
+   * qu'on attend. Si la web socket l'a déjà annoncée (`INPUT` arrivé avant), on la garde.
+   */
+  awaitTurn(messageId?: string) {
+    if (messageId && this.current === messageId) return;
+    this.begin();
+    this.expect(messageId);
+  }
+
   /** Se tait et ignore la suite du tour en cours. */
   silence() {
     if (this.current) this.ignored.add(this.current);
