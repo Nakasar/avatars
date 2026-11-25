@@ -1,3 +1,5 @@
+import { socketBase } from './TranscriptionStream';
+
 /**
  * Web socket d'une application (avatar) Breign : le canal descendant. La plateforme y pousse
  * tout ce que l'avatar doit dire, montrer ou faire (`SAY`, `SHOW_IMAGE`, `DO_ACTION`…).
@@ -193,24 +195,8 @@ export class AppSocket {
   }
 }
 
-/**
- * URL de la socket à partir de l'URL de l'API : `https://api.breign.eu` → `wss://api.breign.eu`,
- * et un chemin relatif (`/breign-api`, proxy de développement) → la même origine en `ws(s)://`.
- * Hors de la machine locale, un chemin relatif donne VITE_BREIGN_SOCKET_URL (par défaut wss://api.breign.eu).
- */
+/** URL de la socket de l'app : `wss://…/apps/{appId}[/instances/{instanceId}]/sockets`. */
 export function appSocketUrl(basePath: string, appId: string, instanceId?: string) {
-  const base = basePath.replace(/\/$/, '');
-  const abs = /^https?:\/\//i.test(base)
-    ? base.replace(/^http/i, 'ws')
-    : isLoopback()
-      ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${base.startsWith('/') ? '' : '/'}${base}`
-      : // Hébergé (Vercel…) : les réécritures ne relaient pas les web sockets, on va droit à l'API.
-        (import.meta.env.VITE_BREIGN_SOCKET_URL || 'wss://api.breign.eu').replace(/\/$/, '');
   const inst = instanceId && instanceId !== 'DEFAULT' ? `/instances/${encodeURIComponent(instanceId)}` : '';
-  return `${abs}/apps/${encodeURIComponent(appId)}${inst}/sockets`;
-}
-
-function isLoopback() {
-  const h = location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+  return `${socketBase(basePath)}/apps/${encodeURIComponent(appId)}${inst}/sockets`;
 }

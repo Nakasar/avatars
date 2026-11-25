@@ -7,6 +7,14 @@ import { safeStreamingText, stripActions } from '../actions/parse';
 import { toWav16k, VoiceActivity, type Utterance } from './VoiceActivity';
 import { AppReplies } from './AppReplies';
 import type { AppMessage } from '../breign/AppSocket';
+import { TranscriptionStream, type TranscriptFrame } from '../breign/TranscriptionStream';
+
+/** Audio gardé avant le début de la parole, envoyé avec elle (première syllabe). */
+const STREAM_PREROLL_FRAMES = 20; // 20 × 20 ms
+/** Audio encore envoyé après la fin de la parole détectée, avant `commit`. */
+const STREAM_TAIL_MS = 300;
+/** Sans `avatar.turn` dans ce délai après la fin de la parole, l'avatar rend la main. */
+const TURN_WAIT_MS = 10_000;
 
 export type ConversationState = 'off' | 'idle' | 'user-speaking' | 'transcribing' | 'thinking' | 'speaking';
 
@@ -19,6 +27,8 @@ export interface ConversationEvents {
   onLevel?: (level: number) => void;
   /** Actions natives de la réponse (montrer une image, ouvrir une page…), à sa fin. */
   onNativeActions?: (actions: NativeAction[]) => void;
+  /** Transcription en direct : `live` vrai tant que le flux est ouvert. */
+  onLiveTranscription?: (live: boolean) => void;
   /** Une nouvelle réponse commence à être dite. */
   onReplyStart?: () => void;
   /** `DO_ACTION` de l'application, au moment de sa phrase. */
@@ -28,7 +38,18 @@ export interface ConversationEvents {
 }
 
 /**
- * Chef d'orchestre de la conversation vocale, sans bouton :
+ * Chef d'orchestre de la conversation vocale, sans bouton.
+ *
+ * **Transcription en flux** (app Breign et conversation ouverte) : le micro est streamé vers
+ * la session de transcription de la conversation (`POST /apps/{appId}/chats/{chatId}/
+ * transcription-sessions`). Breign transcrit en direct (`transcript.partial`), envoie lui-même
+ * chaque tour à l'agent (`avatar.turn`) et la réponse arrive sur la web socket de l'app. Le
+ * VAD local ne sert plus qu'à deux choses : n'envoyer l'audio que quand quelqu'un parle (ni
+ * la pièce silencieuse, ni la voix de l'avatar revenue par les enceintes), et couper l'avatar
+ * quand on lui parle (barge-in).
+ *
+ * **Sinon** (premier message, mode agent sans app, déploiement sans flux) : chaque énoncé est
+ * découpé par le VAD, transcrit (`speech-to-text`) puis envoyé, comme avant :
  *
  *   écoute ──(voix détectée)──▶ l'utilisateur parle ──(silence)──▶ transcription
  *      ▲                                                               │
@@ -57,6 +78,20 @@ export class Conversation {
    */
   appMode = false;
 
+  /** Flux de transcription de la conversation de l'app (absent : énoncés transcrits un à un). */
+  private stream?: TranscriptionStream;
+  /** Conversation pour laquelle le flux est ouvert (une nouvelle conversation, un nouveau flux). */
+  private streamChat?: string;
+  /** Le flux n'est pas disponible (501, modèle sans flux…) : on ne réessaie plus. */
+  private streamUnavailable = false;
+  private preRoll: Float32Array[] = [];
+  /** L'audio du micro part dans le flux (quelqu'un parle, ou fin de phrase). */
+  private sending = false;
+  private tailMs = 0;
+  private turnTimer?: number;
+  /** Transcription en direct de la phrase en cours (cumul des segments). */
+  private liveText = new Map<string, string>();
+
   constructor(
     private voice: Voice,
     private getBreign: () => BreignService,
@@ -67,6 +102,7 @@ export class Conversation {
     this.vad.onSpeechStart = (bargeIn) => this.userStarted(bargeIn);
     this.vad.onSpeechEnd = (u) => void this.userFinished(u);
     this.vad.onSpeechCancel = () => this.userCancelled();
+    this.vad.onFrame = (f, rate) => this.onMicFrame(f, rate);
     this.vad.onLevel = (level, speaking) => {
       this.events.onLevel?.(level);
       this.getAvatar()?.setUserLevel(speaking ? level : 0);
@@ -125,12 +161,143 @@ export class Conversation {
     this.voice.unlock();
     await this.vad.start();
     this.setState('idle');
+    void this.ensureStream();
   }
 
   stop() {
     this.interrupt();
+    this.closeStream();
     this.vad.stop();
     this.setState('off');
+  }
+
+  /** La transcription en flux est ouverte (ou en reconnexion). */
+  get live() {
+    return Boolean(this.stream && this.stream.state !== 'failed' && this.stream.state !== 'closed');
+  }
+
+  /**
+   * Ouvre le flux de transcription si c'est possible : app connectée, conversation déjà
+   * ouverte (le flux s'y rattache), micro démarré. Appelée au démarrage et après chaque réponse.
+   */
+  async ensureStream() {
+    const breign = this.getBreign();
+    const chat = breign.appConversationId;
+    if (!this.appMode || !chat || this.state === 'off' || this.streamUnavailable) return;
+    if (this.stream && this.streamChat === chat) return;
+    this.closeStream();
+    this.streamChat = chat;
+    const stream = new TranscriptionStream({
+      basePath: breign.settings.basePath,
+      open: () => breign.openAppTranscription(),
+      onPartial: (id, text) => this.onLiveText(id, text),
+      onFinal: (f) => this.onLiveText(f.itemId ?? '', f.text ?? '', true),
+      onFrame: (f) => this.onStreamFrame(f),
+      onState: (st, detail) => {
+        if (stream !== this.stream) return;
+        if (st === 'failed') {
+          this.closeStream();
+          this.streamUnavailable = true;
+          if (detail) this.events.onError?.(`${detail} Retour à la transcription phrase par phrase.`);
+        }
+        this.events.onLiveTranscription?.(this.live);
+      },
+    });
+    this.stream = stream;
+    try {
+      await stream.connect();
+      console.info('[conversation] transcription en flux :', stream.mode, stream.model);
+    } catch (e) {
+      if (stream !== this.stream) return;
+      this.closeStream();
+      // 501 (déploiement sans flux), 400 (modèle incapable de streamer…) : phrase par phrase.
+      this.streamUnavailable = true;
+      console.info('[conversation] transcription en flux indisponible :', await describeError(e));
+    }
+  }
+
+  /** Ferme le flux (changement de réglages, arrêt) ; `retry` autorise une nouvelle tentative. */
+  closeStream(retry = false) {
+    const stream = this.stream;
+    this.stream = undefined;
+    this.streamChat = undefined;
+    this.sending = false;
+    this.preRoll = [];
+    this.liveText.clear();
+    clearTimeout(this.turnTimer);
+    if (retry) this.streamUnavailable = false;
+    if (stream) {
+      stream.close();
+      this.events.onLiveTranscription?.(false);
+    }
+  }
+
+  /** Trame du micro (20 ms) : envoyée au flux seulement pendant la parole. */
+  private onMicFrame(f: Float32Array, rate: number) {
+    const stream = this.stream;
+    if (!stream) return;
+    if (!this.sending) {
+      this.preRoll.push(f);
+      if (this.preRoll.length > STREAM_PREROLL_FRAMES) this.preRoll.shift();
+      return;
+    }
+    stream.pushAudio(f, rate);
+    if (this.tailMs > 0) {
+      this.tailMs -= (f.length / rate) * 1000;
+      if (this.tailMs <= 0) {
+        this.sending = false;
+        stream.commit(); // fin du tour sans attendre la détection de silence du serveur
+      }
+    }
+  }
+
+  /** Début de parole : le flux reçoit la pré-écoute puis l'audio en direct. */
+  private startSending() {
+    if (!this.live) return;
+    const rate = this.voice.ctx.sampleRate;
+    if (!this.sending) for (const f of this.preRoll) this.stream!.pushAudio(f, rate);
+    this.preRoll = [];
+    this.sending = true;
+    this.tailMs = 0;
+  }
+
+  private onLiveText(itemId: string, text: string, final = false) {
+    if (final && !text.trim()) {
+      this.liveText.delete(itemId);
+      return;
+    }
+    this.liveText.set(itemId, text.trim());
+    const all = [...this.liveText.values()].filter(Boolean).join(' ');
+    if (all) this.events.onUserText?.(all);
+  }
+
+  /** Trames propres à la session de l'avatar : le tour transcrit est parti à l'agent. */
+  private onStreamFrame(f: TranscriptFrame) {
+    if (f.type === 'avatar.turn') {
+      clearTimeout(this.turnTimer);
+      const turn = f.turn as Record<string, unknown> | undefined;
+      const text = String(f.text ?? turn?.text ?? f.message ?? [...this.liveText.values()].join(' ')).trim();
+      const messageId = (f.messageId ?? turn?.messageId) as string | undefined;
+      this.liveText.clear();
+      if (text) this.events.onUserText?.(text);
+      ++this.turn;
+      this.abort?.abort();
+      this.replies.awaitTurn(messageId);
+      this.setState('thinking');
+      const avatar = this.getAvatar();
+      avatar?.setMode('thinking');
+      avatar?.setExpression('thinking', 0.5);
+      this.avatarStartedSpeaking = false;
+      return;
+    }
+    if (f.type === 'avatar.turn_failed') {
+      clearTimeout(this.turnTimer);
+      this.liveText.clear();
+      const reason = String(f.message ?? f.reason ?? f.code ?? '');
+      void this.fail(new Error(`La question n’a pas pu être envoyée à l’agent${reason ? ` : ${reason}` : ''}.`));
+      return;
+    }
+    if (f.type !== 'usage') console.debug('[transcription] trame', f);
   }
 
   /** Coupe l'avatar et abandonne la réponse en cours. */
@@ -159,27 +326,42 @@ export class Conversation {
   }
 
   /**
-   * Mode réunion : un son vient d'être détecté sur l'audio de la réunion (VAD dédié).
-   *
-   * Contrairement au micro (une seule personne, qui parle à l'avatar), la réunion parle
-   * presque tout le temps et pas forcément à l'avatar :
-   *  - pendant qu'il réfléchit, une réponse demandée n'est jamais abandonnée ;
-   *  - pendant qu'il parle, il se tait (barge-in) — le VAD de la réunion n'émet ce cas
-   *    qu'après une prise de parole longue (`bargeInStartMs`), pas pour un « hmm ». Entre deux
-   *    phrases d'une réponse (état `speaking` sans `bargeIn`), on ne l'interrompt pas non plus.
+   * Fait dire un texte venu d'ailleurs (réponse de l'agent en réunion) : l'avatar se met en
+   * mode parole, et la voix le synthétise (voix de l'app) en jouant ses codes d'action.
    */
-  noteSpeechStart(bargeIn: boolean) {
-    if (bargeIn) return this.userStarted(true);
-    if (this.state === 'speaking' || this.state === 'thinking' || this.state === 'transcribing') return;
-    this.userStarted(false);
+  speak(text: string) {
+    if (!text.trim()) return;
+    this.interrupt();
+    this.replyStarted(moodOf(stripActions(text)));
+    this.events.onAgentText?.(stripActions(text, true), true);
+    this.voice.say(text);
   }
 
-  /** Mode réunion : plus personne ne parle et rien ne s'adressait à l'avatar, on rend la main. */
-  noteSpeechEnd() {
-    if (this.state === 'user-speaking') this.userCancelled();
+  /**
+   * Fait dire une phrase dont l'audio vient de Breign (trame `agent.audio` du mode réunion) :
+   * l'audio est joué tel quel, le lip-sync suit le son. `startsReply` ouvre une nouvelle
+   * réponse (l'avatar se tait d'abord et passe en mode parole).
+   */
+  speakPrepared(text: string, audioSrc: string | undefined, startsReply: boolean) {
+    if (startsReply) {
+      this.interrupt();
+      this.replyStarted(moodOf(stripActions(text)));
+      this.spoken = [];
+    }
+    this.voice.sayPrepared({
+      text,
+      audioSrc,
+      onStart: () => {
+        const clean = stripActions(text, true).trim();
+        if (clean) this.spoken.push(clean);
+        this.events.onAgentText?.(this.spoken.join(' '), true);
+      },
+    });
   }
+  private spoken: string[] = [];
 
   private userStarted(bargeIn: boolean) {
+    this.startSending();
     const avatar = this.getAvatar();
     if (bargeIn || this.state === 'speaking') {
       // L'utilisateur coupe la parole : l'avatar se tait et l'écoute.
@@ -198,12 +380,35 @@ export class Conversation {
   }
 
   private userCancelled() {
+    if (this.sending && this.tailMs <= 0) {
+      // Toux, clic : rien à transcrire, l'audio déjà parti sera ignoré par le serveur.
+      this.sending = false;
+      this.stream?.drop();
+    }
     // Bruit bref : on revient à l'état précédent si rien n'a été interrompu.
     if (this.state === 'user-speaking') this.setState(this.openUserText ? 'thinking' : 'idle');
     if (!this.openUserText) this.getAvatar()?.setMode('idle');
   }
 
   private async userFinished(u: Utterance) {
+    if (this.live && this.sending) {
+      // En flux : Breign transcrit et envoie le tour à l'agent lui-même (`avatar.turn`).
+      this.tailMs = STREAM_TAIL_MS;
+      this.setState('transcribing');
+      const avatar = this.getAvatar();
+      avatar?.nod();
+      avatar?.setMode('thinking');
+      const turn = this.turn;
+      clearTimeout(this.turnTimer);
+      this.turnTimer = window.setTimeout(() => {
+        // Rien d'exploitable (bruit, mot inaudible) : l'avatar rend la main.
+        if (turn === this.turn && this.state === 'transcribing') {
+          this.setState('idle');
+          avatar?.setMode('idle');
+        }
+      }, TURN_WAIT_MS);
+      return;
+    }
     const turn = ++this.turn;
     const breign = this.getBreign();
     if (!breign.configured) {
@@ -287,6 +492,8 @@ export class Conversation {
     this.replies.begin();
     try {
       const messageId = await this.getBreign().askApp(text);
+      // La conversation existe maintenant : les tours suivants passent par le flux.
+      void this.ensureStream();
       if (turn !== this.turn) return;
       this.replies.expect(messageId);
     } catch (e) {

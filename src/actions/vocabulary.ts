@@ -131,23 +131,6 @@ export const ACTION_CATEGORIES: ActionCategory[] = [
     example: '[ACTION.RESET] Bon, reprenons calmement.',
     values: [],
   },
-  {
-    name: 'TOOL',
-    title: 'Outils locaux',
-    about:
-      "Déclenche un outil exécuté localement par l'avatar, sans aucun effet visuel. Le résultat de l'outil arrive dans le message de conversation suivant : émets le code, puis attends ce résultat avant de conclure ta réponse.",
-    param:
-      'pour `TRANSCRIPT_SEARCH` : mots-clés recherchés dans la transcription (vide : la fin de la transcription)',
-    example: 'Qu’a-t-on dit sur le budget ? [ACTION.TOOL.TRANSCRIPT_SEARCH:budget]',
-    values: [
-      {
-        name: 'TRANSCRIPT_SEARCH',
-        aliases: ['TRANSCRIPT', 'RECHERCHE'],
-        effect:
-          'recherche dans toute la transcription de la réunion en cours (outil local exécuté par l’avatar) et renvoie les passages horodatés correspondants.',
-      },
-    ],
-  },
 ];
 
 /** Code d'action reconnu, normalisé (alias résolus). */
@@ -209,7 +192,6 @@ export function actionPrompt(): string {
     '- Reste sobre : un à trois codes par réponse suffisent en général.',
     "- N'invente pas de code : utilise seulement ceux de la liste. N'explique jamais les codes à l'utilisateur.",
     "- L'émotion, la couleur, la forme et la taille durent jusqu'à ta réponse suivante.",
-    "- Les codes `TOOL` exécutent un outil local chez l'avatar : émets le code, puis attends son résultat (prochain message de la conversation) avant de conclure.",
     '',
     'Codes disponibles :',
   ];

@@ -25,12 +25,21 @@
       <div id="suggestions" class="suggestions"></div>
     </section>
 
-    <!-- Transcription de la réunion (mode réunion) -->
+    <!-- Réunion Breign (mode réunion) : transcription, notes, points clés -->
     <aside id="transcript" class="transcript" hidden aria-live="polite">
-      <h2>Transcription
-        <button type="button" id="transcript-clear" class="icon" title="Effacer la transcription" aria-label="Effacer la transcription">✕</button>
+      <h2><span id="meeting-title">Réunion</span>
+        <span class="actions">
+          <button type="button" id="meeting-end" class="pill" title="Terminer la réunion : l’agent rédige le compte rendu final">Terminer</button>
+          <button type="button" id="transcript-close" class="icon" title="Masquer le panneau" aria-label="Masquer le panneau">✕</button>
+        </span>
       </h2>
       <div id="transcript-lines"></div>
+      <p id="transcript-live" class="transcript-line live" hidden></p>
+      <details id="meeting-notes" class="meeting-notes">
+        <summary>Notes <span id="meeting-notes-meta"></span></summary>
+        <ul id="meeting-highlights"></ul>
+        <div id="meeting-notes-body"></div>
+      </details>
     </aside>
 
     <!-- Indicateur d'état : pas de bouton, juste un témoin d'écoute -->
@@ -97,9 +106,9 @@
         <label>Langue
           <select name="lang"><option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="es">Español</option><option value="it">Italiano</option></select>
         </label>
-        <label>Mot d’activation en réunion — optionnel
-          <input name="wakeWord" autocomplete="off" placeholder="nom de l’agent, ex. Breign" />
-          <small>En mode réunion (🎧/🎙️), l’avatar transcrit la réunion et ne répond que quand ce mot est prononcé — les variantes phonétiques comptent (« Brain » pour « Breign »), ainsi que « agent », « bot », « robot ». Vide : le nom de l’agent, sinon « breign ».</small>
+        <label>Réponses en réunion
+          <select name="meetingVoice"><option value="on">Dites à voix haute</option><option value="off">Texte seulement</option></select>
+          <small>En mode réunion (🎧/🎙️), Breign transcrit la réunion et réveille l’agent quand on l’appelle : son nom, ses surnoms (réglés sur l’agent dans Breign), « Breign », « bot » ou « agent ».</small>
         </label>
         <label>Apparence du bot
           <select name="appearance">
